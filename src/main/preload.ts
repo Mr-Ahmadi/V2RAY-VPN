@@ -32,6 +32,14 @@ const electronAPI = {
     save: (settings: any) => ipcRenderer.invoke('settings:save', settings),
     togglePing: (enable: boolean) => ipcRenderer.invoke('settings:togglePing', enable),
   },
+
+  // Debug logger
+  debug: {
+    getLogs: (filter?: any) => ipcRenderer.invoke('debug:getLogs', filter),
+    clearLogs: () => ipcRenderer.invoke('debug:clearLogs'),
+    exportLogs: () => ipcRenderer.invoke('debug:exportLogs'),
+    getLogFile: () => ipcRenderer.invoke('debug:getLogFile'),
+  },
 };
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);

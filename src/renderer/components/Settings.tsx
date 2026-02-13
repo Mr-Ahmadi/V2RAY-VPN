@@ -175,6 +175,9 @@ export default function Settings() {
             <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
               DNS Settings
             </Typography>
+            <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mb: 2 }}>
+              DNS queries are routed through the VPN to prevent DNS leaks
+            </Typography>
             <FormControl fullWidth margin="normal">
               <InputLabel>DNS Provider</InputLabel>
               <Select
@@ -182,10 +185,11 @@ export default function Settings() {
                 label="DNS Provider"
                 onChange={(e) => handleSettingChange('dnsProvider', e.target.value)}
               >
-                <MenuItem value="cloudflare">Cloudflare (1.1.1.1)</MenuItem>
-                <MenuItem value="google">Google (8.8.8.8)</MenuItem>
-                <MenuItem value="quad9">Quad9 (9.9.9.9)</MenuItem>
-                <MenuItem value="custom">Custom</MenuItem>
+                <MenuItem value="cloudflare">Cloudflare (1.1.1.1) - Fast & Private</MenuItem>
+                <MenuItem value="google">Google (8.8.8.8) - Reliable</MenuItem>
+                <MenuItem value="quad9">Quad9 (9.9.9.9) - Security Focused</MenuItem>
+                <MenuItem value="opendns">OpenDNS (208.67.222.222) - Family Safe</MenuItem>
+                <MenuItem value="custom">Custom DNS Servers</MenuItem>
               </Select>
             </FormControl>
 
@@ -194,6 +198,7 @@ export default function Settings() {
                 <TextField
                   fullWidth
                   label="Primary DNS"
+                  placeholder="1.1.1.1"
                   value={settings.primaryDns || ''}
                   onChange={(e) => handleSettingChange('primaryDns', e.target.value)}
                   margin="normal"
@@ -201,12 +206,60 @@ export default function Settings() {
                 <TextField
                   fullWidth
                   label="Secondary DNS"
+                  placeholder="8.8.8.8"
                   value={settings.secondaryDns || ''}
                   onChange={(e) => handleSettingChange('secondaryDns', e.target.value)}
                   margin="normal"
                 />
               </>
             )}
+            
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={settings.blockAds !== false}
+                  onChange={(e) => handleSettingChange('blockAds', e.target.checked)}
+                />
+              }
+              label="Block ads and trackers"
+              sx={{ mt: 2 }}
+            />
+            <Typography variant="caption" color="textSecondary">
+              Uses V2Ray's built-in ad blocking rules
+            </Typography>
+          </CardContent>
+        </Card>
+
+        <Card sx={{ backgroundColor: '#1e293b', mb: 2 }}>
+          <CardContent>
+            <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
+              Security
+            </Typography>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={settings.killSwitch || false}
+                  onChange={(e) => handleSettingChange('killSwitch', e.target.checked)}
+                />
+              }
+              label="Kill Switch (Block internet if VPN disconnects)"
+            />
+            <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mb: 2 }}>
+              Prevents data leaks by blocking all traffic when VPN is disconnected
+            </Typography>
+            
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={settings.ipv6Disable || false}
+                  onChange={(e) => handleSettingChange('ipv6Disable', e.target.checked)}
+                />
+              }
+              label="Disable IPv6 (Prevent IPv6 leaks)"
+            />
+            <Typography variant="caption" color="textSecondary">
+              Recommended if your VPN server doesn't support IPv6
+            </Typography>
           </CardContent>
         </Card>
 

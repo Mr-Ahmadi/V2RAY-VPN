@@ -76,6 +76,7 @@ export default function ServerManager() {
     password: '', // for Trojan/Shadowsocks
     encryption: 'none',
     method: 'aes-256-gcm',
+    fullConfig: {} as Record<string, any>, // Store full config from parsed URI
   });
 
   useEffect(() => {
@@ -123,6 +124,7 @@ export default function ServerManager() {
         password: server.config.password || '',
         encryption: server.config.encryption || 'none',
         method: server.config.method || 'aes-256-gcm',
+        fullConfig: server.config || {},
       });
     } else {
       setEditingId(null);
@@ -136,6 +138,7 @@ export default function ServerManager() {
         password: '',
         encryption: 'none',
         method: 'aes-256-gcm',
+        fullConfig: {},
       });
     }
     setOpenDialog(true);
@@ -334,6 +337,7 @@ export default function ServerManager() {
         password: parsed.config?.password || '',
         encryption: parsed.config?.encryption || 'none',
         method: parsed.config?.method || 'aes-256-gcm',
+        fullConfig: parsed.config || {}, // Preserve the entire config from parsing
       });
 
       setOpenUriDialog(false);
@@ -395,12 +399,17 @@ export default function ServerManager() {
         config.method = formData.method;
       }
 
+      // If fullConfig exists (from parsed URI), merge it to preserve all parameters
+      const finalConfig = formData.fullConfig && Object.keys(formData.fullConfig).length > 0 
+        ? { ...formData.fullConfig, ...config } // Start with fullConfig, override with form values
+        : config;
+
       const serverData = {
         name: formData.name,
         protocol: formData.protocol,
         address: formData.address,
         port: formData.port,
-        config,
+        config: finalConfig,
         remarks: formData.remarks,
       };
 

@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import { initializeDatabase, saveMemoryStorage } from '../db/database';
 import { V2RayService } from '../services/v2ray';
 import { AppRoutingService } from '../services/appRouting';
+import debugLogger from '../services/debugLogger';
 
 // Make the custom `app://` scheme behave like a standard, secure scheme so
 // relative asset requests and Fetch/XHR/CSP work correctly in production.
@@ -249,6 +250,37 @@ app.on('activate', () => {
 const createMenu = () => {
   const template: any = [
     {
+      label: 'Edit',
+      submenu: [
+        {
+          label: 'Undo',
+          accelerator: 'CmdOrCtrl+Z',
+          role: 'undo',
+        },
+        {
+          label: 'Redo',
+          accelerator: 'CmdOrCtrl+Shift+Z',
+          role: 'redo',
+        },
+        { type: 'separator' },
+        {
+          label: 'Cut',
+          accelerator: 'CmdOrCtrl+X',
+          role: 'cut',
+        },
+        {
+          label: 'Copy',
+          accelerator: 'CmdOrCtrl+C',
+          role: 'copy',
+        },
+        {
+          label: 'Paste',
+          accelerator: 'CmdOrCtrl+V',
+          role: 'paste',
+        },
+      ],
+    },
+    {
       label: 'File',
       submenu: [
         {
@@ -418,6 +450,43 @@ const setupIPCHandlers = () => {
       if (!v2rayService) throw new Error('V2Ray service not initialized');
       await v2rayService.saveSettings({ enablePingCalculation: enable });
       return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Debug logger handlers
+  ipcMain.handle('debug:getLogs', async (_: any, filter?: any) => {
+    try {
+      const logs = debugLogger.getLogs(filter);
+      return { success: true, data: logs };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('debug:clearLogs', async () => {
+    try {
+      debugLogger.clearLogs();
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('debug:exportLogs', async () => {
+    try {
+      const logs = debugLogger.exportLogs();
+      return { success: true, data: logs };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('debug:getLogFile', async () => {
+    try {
+      const filePath = debugLogger.getLogFilePath();
+      return { success: true, data: filePath };
     } catch (error: any) {
       return { success: false, error: error.message };
     }

@@ -60,17 +60,39 @@ export class ConfigImportExport {
     const base64 = url.replace('vmess://', '');
     const decoded = JSON.parse(Buffer.from(base64, 'base64').toString('utf-8'));
 
+    const config: any = {
+      id: decoded.id,
+      alterId: decoded.aid || 0,
+      security: decoded.scy || 'auto',
+    };
+
+    // Extract transport settings if present
+    if (decoded.net) {
+      config.type = decoded.net;
+    }
+    if (decoded.path) {
+      config.path = decoded.path;
+    }
+    if (decoded.host) {
+      config.host = decoded.host;
+    }
+    if (decoded.tls) {
+      config.tls = decoded.tls;
+    }
+    if (decoded.sni) {
+      config.sni = decoded.sni;
+    }
+    if (decoded.type) {
+      config.obfsSettings = decoded.type; // obfs type if present
+    }
+
     return {
       id: decoded.id || this.generateId(),
       name: decoded.ps || 'Vmess Server',
       protocol: 'vmess',
       address: decoded.add,
       port: parseInt(decoded.port || '443'),
-      config: {
-        id: decoded.id,
-        alterId: decoded.aid || 0,
-        security: decoded.scy || 'auto',
-      },
+      config,
       remarks: decoded.ps,
     };
   }
@@ -80,9 +102,109 @@ export class ConfigImportExport {
     const uuid = urlObj.username;
     const address = urlObj.hostname;
     const port = parseInt(urlObj.port) || 443;
-    const name = urlObj.searchParams.get('remarks') || 
-                 Buffer.from(urlObj.hash.slice(1), 'base64').toString('utf-8').split('?')[0] ||
-                 'VLESS Server';
+    
+    // Parse name from remarks parameter or hash fragment
+    let name = urlObj.searchParams.get('remarks') || 'VLESS Server';
+    
+    // If no remarks parameter, try to extract name from hash fragment
+    if (name === 'VLESS Server' && urlObj.hash.slice(1)) {
+      const hashContent = urlObj.hash.slice(1);
+      try {
+        // Try to decode as base64 (for URLs exported from this app)
+        const decoded = Buffer.from(hashContent, 'base64').toString('utf-8');
+        // Only use if it's valid UTF-8 (not random bytes)
+        if (decoded && !decoded.includes('\ufffd')) {
+          name = decoded.split('?')[0];
+        } else {
+          // Use as plain text if base64 decode fails or produces invalid UTF-8
+          name = decodeURIComponent(hashContent);
+        }
+      } catch (e) {
+        // If base64 decode fails, use as plain text
+        name = decodeURIComponent(hashContent);
+      }
+    }
+
+    // Extract all VLESS parameters from query string
+    const config: any = {
+      id: uuid,
+      encryption: urlObj.searchParams.get('encryption') || 'none',
+      type: urlObj.searchParams.get('type') || 'tcp',
+      security: urlObj.searchParams.get('security') || 'none',
+    };
+
+    // Optional parameters - CRITICAL: Extract all parameters needed for proper config generation
+    if (urlObj.searchParams.has('path')) {
+      const path = urlObj.searchParams.get('path');
+      if (path) {
+        config.path = path;
+      }
+    }
+    if (urlObj.searchParams.has('host')) {
+      const host = urlObj.searchParams.get('host');
+      if (host) {
+        config.host = host;
+      }
+    }
+    if (urlObj.searchParams.has('sni')) {
+      const sni = urlObj.searchParams.get('sni');
+      if (sni) {
+        config.sni = sni;
+      }
+    }
+    if (urlObj.searchParams.has('flow')) {
+      const flow = urlObj.searchParams.get('flow');
+      if (flow) {
+        config.flow = flow;
+      }
+    }
+    if (urlObj.searchParams.has('allowInsecure')) {
+      config.allowInsecure = urlObj.searchParams.get('allowInsecure');
+    }
+    if (urlObj.searchParams.has('insecure')) {
+      config.insecure = urlObj.searchParams.get('insecure');
+    }
+    if (urlObj.searchParams.has('serviceName')) {
+      const serviceName = urlObj.searchParams.get('serviceName');
+      if (serviceName) {
+        config.serviceName = serviceName;
+      }
+    }
+    if (urlObj.searchParams.has('alpn')) {
+      const alpn = urlObj.searchParams.get('alpn');
+      if (alpn) {
+        config.alpn = alpn;
+      }
+    }
+    if (urlObj.searchParams.has('fingerprint')) {
+      const fingerprint = urlObj.searchParams.get('fingerprint');
+      if (fingerprint) {
+        config.fingerprint = fingerprint;
+      }
+    }
+    if (urlObj.searchParams.has('publicKey')) {
+      const publicKey = urlObj.searchParams.get('publicKey');
+      if (publicKey) {
+        config.publicKey = publicKey;
+      }
+    }
+    if (urlObj.searchParams.has('shortId')) {
+      const shortId = urlObj.searchParams.get('shortId');
+      if (shortId) {
+        config.shortId = shortId;
+      }
+    }
+
+    console.log('[ConfigImportExport] Parsed VLESS config:', {
+      name,
+      address,
+      port,
+      type: config.type,
+      security: config.security,
+      path: config.path,
+      host: config.host,
+      sni: config.sni,
+    });
 
     return {
       id: this.generateId(),
@@ -90,10 +212,7 @@ export class ConfigImportExport {
       protocol: 'vless',
       address,
       port,
-      config: {
-        id: uuid,
-        encryption: urlObj.searchParams.get('encryption') || 'none',
-      },
+      config,
       remarks: name,
     };
   }

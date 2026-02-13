@@ -8,5 +8,5 @@
     "strict": false
   },
   "include": ["src/main", "src/utils", "src/db", "src/services"],
-  "exclude": ["src/renderer", "node_modules"]
+  "exclude": ["src/renderer", "node_modules", "**/*.test.ts"]
 }
