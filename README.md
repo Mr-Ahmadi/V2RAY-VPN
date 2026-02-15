@@ -2,15 +2,6 @@
 
 A full-featured V2Ray VPN client for macOS with system-wide proxy support, similar to V2Box and V2RayNG.
 
-## ⚠️ Recent Updates
-
-**IMPORTANT:** The application has been updated with critical bug fixes. Please read:
-- 📖 [FIXES_AND_ANALYSIS.md](FIXES_AND_ANALYSIS.md) - What was wrong and how it's fixed
-- 🧪 [TESTING_GUIDE.md](TESTING_GUIDE.md) - How to test the fixes
-- 🗺️ [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) - Future features and improvements
-
-If you were experiencing issues with traffic not passing through the VPN, these fixes address those problems.
-
 ## ✨ Features
 
 - ✅ **Full VPN functionality** - routes all system traffic through the proxy

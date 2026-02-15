@@ -23,6 +23,9 @@ const electronAPI = {
     setAppBypass: (appPath: string, shouldBypass: boolean) =>
       ipcRenderer.invoke('routing:setAppBypass', appPath, shouldBypass),
     getBypassApps: () => ipcRenderer.invoke('routing:getBypassApps'),
+    setAppPolicy: (appPath: string, policy: 'none' | 'bypass' | 'vpn') =>
+      ipcRenderer.invoke('routing:setAppPolicy', appPath, policy),
+    getAppPolicies: () => ipcRenderer.invoke('routing:getAppPolicies'),
     launchWithProxy: (appPath: string) => ipcRenderer.invoke('routing:launchWithProxy', appPath),
   },
 

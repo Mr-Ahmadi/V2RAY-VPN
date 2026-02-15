@@ -37,7 +37,7 @@ describe('V2RayService - Routing Rules', () => {
   });
 
   describe('generateV2RayConfig routing rules', () => {
-    test('should only include localhost bypass rule by default', () => {
+    test('should include localhost bypass and Telegram proxy rules by default', () => {
       // Access the private method via type assertion for testing
       const config = (service as any).generateV2RayConfig(
         {
@@ -56,12 +56,35 @@ describe('V2RayService - Routing Rules', () => {
         { blockAds: false }
       );
 
-      // Should have exactly 1 routing rule (localhost bypass)
-      expect(config.routing.rules).toHaveLength(1);
+      // Should have localhost bypass + Telegram domain + Telegram IP rules
+      expect(config.routing.rules).toHaveLength(3);
       expect(config.routing.rules[0]).toEqual({
         type: 'field',
         outboundTag: 'direct',
         ip: ['127.0.0.0/8'],
+      });
+      expect(config.routing.rules[1]).toEqual({
+        type: 'field',
+        outboundTag: 'proxy',
+        domain: [
+          'geosite:telegram',
+          'domain:telegram.org',
+          'domain:t.me',
+          'domain:telegra.ph',
+          'domain:telegram.me',
+          'domain:tdesktop.com',
+        ],
+      });
+      expect(config.routing.rules[2]).toEqual({
+        type: 'field',
+        outboundTag: 'proxy',
+        ip: [
+          '91.108.4.0/22',
+          '91.108.8.0/21',
+          '91.108.16.0/22',
+          '91.108.56.0/22',
+          '149.154.160.0/20',
+        ],
       });
     });
 
@@ -83,14 +106,37 @@ describe('V2RayService - Routing Rules', () => {
         { blockAds: true }
       );
 
-      // Should have 2 routing rules (localhost bypass + ad blocking)
-      expect(config.routing.rules).toHaveLength(2);
+      // Should have 4 routing rules (localhost bypass + Telegram domain + Telegram IP + ad blocking)
+      expect(config.routing.rules).toHaveLength(4);
       expect(config.routing.rules[0]).toEqual({
         type: 'field',
         outboundTag: 'direct',
         ip: ['127.0.0.0/8'],
       });
       expect(config.routing.rules[1]).toEqual({
+        type: 'field',
+        outboundTag: 'proxy',
+        domain: [
+          'geosite:telegram',
+          'domain:telegram.org',
+          'domain:t.me',
+          'domain:telegra.ph',
+          'domain:telegram.me',
+          'domain:tdesktop.com',
+        ],
+      });
+      expect(config.routing.rules[2]).toEqual({
+        type: 'field',
+        outboundTag: 'proxy',
+        ip: [
+          '91.108.4.0/22',
+          '91.108.8.0/21',
+          '91.108.16.0/22',
+          '91.108.56.0/22',
+          '149.154.160.0/20',
+        ],
+      });
+      expect(config.routing.rules[3]).toEqual({
         type: 'field',
         outboundTag: 'block',
         domain: ['geosite:category-ads-all'],
@@ -148,6 +194,110 @@ describe('V2RayService - Routing Rules', () => {
       expect(config.outbounds).toBeDefined();
       expect(config.outbounds.length).toBeGreaterThan(0);
       expect(config.outbounds[0].tag).toBe('proxy');
+    });
+
+    test('should disable outbound mux by default for stability', () => {
+      const config = (service as any).generateV2RayConfig(
+        {
+          id: 'test-server',
+          name: 'Test Server',
+          protocol: 'vless',
+          address: 'example.com',
+          port: 443,
+          config: {
+            id: 'test-uuid',
+            encryption: 'none',
+            type: 'tcp',
+          },
+        },
+        'full',
+        [],
+        { blockAds: false }
+      );
+
+      expect(config.outbounds[0].mux).toBeUndefined();
+    });
+
+    test('should not force ws Host header when host query param is empty', () => {
+      const config = (service as any).generateV2RayConfig(
+        {
+          id: 'test-server',
+          name: 'Test Server',
+          protocol: 'vless',
+          address: 'speed.endless1service.fun',
+          port: 2095,
+          config: {
+            id: 'test-uuid',
+            encryption: 'none',
+            type: 'ws',
+            security: 'none',
+            path: '/',
+            host: '',
+          },
+        },
+        'full',
+        [],
+        { blockAds: false }
+      );
+
+      expect(config.outbounds[0].streamSettings.wsSettings).toEqual({
+        path: '/',
+      });
+    });
+
+    test('should keep custom ws Host header when host query param is set', () => {
+      const config = (service as any).generateV2RayConfig(
+        {
+          id: 'test-server',
+          name: 'Test Server',
+          protocol: 'vless',
+          address: 'speed.endless1service.fun',
+          port: 2095,
+          config: {
+            id: 'test-uuid',
+            encryption: 'none',
+            type: 'ws',
+            security: 'none',
+            path: '/',
+            host: 'cdn.example.com',
+          },
+        },
+        'full',
+        [],
+        { blockAds: false }
+      );
+
+      expect(config.outbounds[0].streamSettings.wsSettings).toEqual({
+        path: '/',
+        headers: {
+          Host: 'cdn.example.com',
+        },
+      });
+    });
+
+    test('should allow enabling outbound mux explicitly', () => {
+      const config = (service as any).generateV2RayConfig(
+        {
+          id: 'test-server',
+          name: 'Test Server',
+          protocol: 'vless',
+          address: 'example.com',
+          port: 443,
+          config: {
+            id: 'test-uuid',
+            encryption: 'none',
+            type: 'tcp',
+          },
+        },
+        'full',
+        [],
+        { blockAds: false, enableMux: true }
+      );
+
+      expect(config.outbounds[0].mux).toEqual({
+        enabled: true,
+        concurrency: 8,
+      });
     });
 
     test('should set domainStrategy to IPIfNonMatch', () => {
@@ -213,6 +363,151 @@ describe('V2RayService - Routing Rules', () => {
       );
 
       expect(config.dns.tag).toBe('dns_out');
+    });
+
+    test('should not generate invalid process-based routing fields from bypass apps', () => {
+      const config = (service as any).generateV2RayConfig(
+        {
+          id: 'test-server',
+          name: 'Test Server',
+          protocol: 'vless',
+          address: 'example.com',
+          port: 443,
+          config: {
+            id: 'test-uuid',
+            encryption: 'none',
+          },
+        },
+        'bypass',
+        [{ appPath: '/Applications/Telegram.app', appName: 'Telegram.app', shouldBypass: true }],
+        { blockAds: false }
+      );
+
+      const hasInvalidProcessField = config.routing.rules.some((rule: any) => 'process' in rule);
+      expect(hasInvalidProcessField).toBe(false);
+    });
+  });
+
+  describe('split tunneling launcher behavior', () => {
+    const makeAppRoutingMock = () => ({
+      ensureAppBypassesProxy: jest.fn().mockResolvedValue(undefined),
+      ensureAppUsesProxy: jest.fn().mockResolvedValue(undefined),
+      findTelegramAppPath: jest.fn().mockResolvedValue('/Applications/Telegram.app'),
+      bootstrapTelegramLocalSocksProxy: jest.fn().mockResolvedValue(undefined),
+    });
+
+    test('bypass mode relaunches selected apps in direct mode by default', async () => {
+      const appRoutingMock = makeAppRoutingMock();
+      (service as any).appRoutingService = appRoutingMock;
+
+      await (service as any).applyLauncherSplitTunnel(
+        'global',
+        'bypass',
+        [
+          { appPath: '/Applications/Firefox.app', appName: 'Firefox.app', shouldBypass: true },
+          { appPath: '/Applications/Brave Browser.app', appName: 'Brave Browser.app', shouldBypass: true },
+        ],
+        {}
+      );
+
+      expect(appRoutingMock.ensureAppBypassesProxy).toHaveBeenCalledTimes(2);
+      expect(appRoutingMock.ensureAppBypassesProxy).toHaveBeenCalledWith('/Applications/Firefox.app', true);
+      expect(appRoutingMock.ensureAppBypassesProxy).toHaveBeenCalledWith('/Applications/Brave Browser.app', true);
+    });
+
+    test('rule mode relaunches selected apps with proxy', async () => {
+      const appRoutingMock = makeAppRoutingMock();
+      (service as any).appRoutingService = appRoutingMock;
+
+      await (service as any).applyLauncherSplitTunnel(
+        'global',
+        'rule',
+        [{ appPath: '/Applications/Firefox.app', appName: 'Firefox.app', shouldBypass: true }],
+        {}
+      );
+
+      expect(appRoutingMock.ensureAppUsesProxy).toHaveBeenCalledWith('/Applications/Firefox.app', true);
+    });
+
+    test('telegram is forced to proxy when not bypassed', async () => {
+      const appRoutingMock = makeAppRoutingMock();
+      (service as any).appRoutingService = appRoutingMock;
+
+      await (service as any).applyLauncherSplitTunnel('global', 'full', [], {});
+
+      expect(appRoutingMock.ensureAppUsesProxy).toHaveBeenCalledWith('/Applications/Telegram.app', true);
+      expect(appRoutingMock.bootstrapTelegramLocalSocksProxy).toHaveBeenCalledWith('127.0.0.1', 10808);
+    });
+
+    test('telegram is not force-proxied when selected for bypass', async () => {
+      const appRoutingMock = makeAppRoutingMock();
+      (service as any).appRoutingService = appRoutingMock;
+
+      await (service as any).applyLauncherSplitTunnel(
+        'global',
+        'bypass',
+        [{ appPath: '/Applications/Telegram.app', appName: 'Telegram.app', shouldBypass: true }],
+        {}
+      );
+
+      expect(appRoutingMock.ensureAppBypassesProxy).toHaveBeenCalledWith('/Applications/Telegram.app', true);
+      expect(appRoutingMock.ensureAppUsesProxy).not.toHaveBeenCalledWith('/Applications/Telegram.app', true);
+      expect(appRoutingMock.bootstrapTelegramLocalSocksProxy).not.toHaveBeenCalled();
+    });
+
+    test('full mode with no bypass keeps regular proxy behavior (no bypass launches)', async () => {
+      const appRoutingMock = makeAppRoutingMock();
+      (service as any).appRoutingService = appRoutingMock;
+
+      await (service as any).applyLauncherSplitTunnel('global', 'full', [], {});
+
+      expect(appRoutingMock.ensureAppBypassesProxy).not.toHaveBeenCalled();
+      // Telegram enforcement is expected in full mode unless explicitly disabled.
+      expect(appRoutingMock.ensureAppUsesProxy).toHaveBeenCalledWith('/Applications/Telegram.app', true);
+    });
+
+    test('skips protected current app path to avoid self-termination', async () => {
+      const appRoutingMock = makeAppRoutingMock();
+      (service as any).appRoutingService = appRoutingMock;
+
+      await (service as any).applyLauncherSplitTunnel(
+        'global',
+        'bypass',
+        [{ appPath: process.execPath, appName: 'self', shouldBypass: true }],
+        {}
+      );
+
+      expect(appRoutingMock.ensureAppBypassesProxy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('dns path logging', () => {
+    test('logs DNS resolution path when building config', () => {
+      const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+      try {
+        (service as any).generateV2RayConfig(
+          {
+            id: 'test-server',
+            name: 'Test Server',
+            protocol: 'vless',
+            address: 'example.com',
+            port: 443,
+            config: {
+              id: 'test-uuid',
+              encryption: 'none',
+            },
+          },
+          'full',
+          [],
+          { dnsProvider: 'cloudflare', blockAds: false }
+        );
+
+        const hasDnsPathLog = logSpy.mock.calls.some((call) => String(call[0]).includes('DNS resolution path'));
+        expect(hasDnsPathLog).toBe(true);
+      } finally {
+        logSpy.mockRestore();
+      }
     });
   });
 });

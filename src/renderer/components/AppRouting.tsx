@@ -1,46 +1,49 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box,
-  Container,
   Card,
   CardContent,
-  Typography,
+  CircularProgress,
+  Container,
+  Divider,
+  IconButton,
+  InputAdornment,
   List,
   ListItem,
   ListItemButton,
   ListItemIcon,
   ListItemText,
-  Switch,
+  MenuItem,
+  Select,
   TextField,
-  InputAdornment,
-  CircularProgress,
-  IconButton,
   Tooltip,
-  Divider,
+  Typography,
 } from '@mui/material';
 import {
-  Search as SearchIcon,
   Apps as AppsIcon,
+  DirectionsRun as BypassIcon,
   Launch as LaunchIcon,
   Public as NetIcon,
+  Search as SearchIcon,
   ShieldOutlined as ProxyIcon,
-  DirectionsRun as BypassIcon,
 } from '@mui/icons-material';
+
+type AppRoutePolicy = 'none' | 'bypass' | 'vpn';
 
 interface App {
   name: string;
   path: string;
 }
 
-interface BypassApp {
+interface AppPolicyRule {
   appPath: string;
   appName: string;
-  shouldBypass: boolean;
+  policy: AppRoutePolicy;
 }
 
 export default function AppRouting() {
   const [allApps, setAllApps] = useState<App[]>([]);
-  const [bypassApps, setBypassApps] = useState<BypassApp[]>([]);
+  const [appPolicies, setAppPolicies] = useState<AppPolicyRule[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
 
@@ -51,9 +54,9 @@ export default function AppRouting() {
   const loadApps = async () => {
     try {
       setLoading(true);
-      const [appsResult, bypassResult] = await Promise.all([
+      const [appsResult, policyResult] = await Promise.all([
         window.electronAPI.routing.getApps(),
-        window.electronAPI.routing.getBypassApps(),
+        window.electronAPI.routing.getAppPolicies(),
       ]);
 
       if (appsResult.success) {
@@ -62,29 +65,32 @@ export default function AppRouting() {
         ) as App[];
         setAllApps(uniqueApps.sort((a, b) => a.name.localeCompare(b.name)));
       }
-      if (bypassResult.success) {
-        setBypassApps(bypassResult.data);
+      if (policyResult.success) {
+        setAppPolicies(policyResult.data);
       }
     } catch (error) {
-      console.error('Error loading apps:', error);
+      console.error('Error loading app routing data:', error);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleToggleApp = async (appPath: string) => {
-    try {
-      const currentlyBypassed = bypassApps.some(app => app.appPath === appPath);
-      const newBypass = !currentlyBypassed;
-      const result = await window.electronAPI.routing.setAppBypass(appPath, newBypass);
-      if (result.success) {
-        // Optimistic update or reload
-        await loadApps();
-      }
-    } catch (error) {
-      console.error('Error toggling app:', error);
+  const policyByPath = useMemo(() => {
+    const map = new Map<string, AppRoutePolicy>();
+    for (const rule of appPolicies) {
+      map.set(rule.appPath, rule.policy);
     }
-  };
+    return map;
+  }, [appPolicies]);
+
+  const bypassCount = useMemo(
+    () => appPolicies.filter(rule => rule.policy === 'bypass').length,
+    [appPolicies]
+  );
+  const vpnCount = useMemo(
+    () => appPolicies.filter(rule => rule.policy === 'vpn').length,
+    [appPolicies]
+  );
 
   const filteredApps = useMemo(() => {
     return allApps.filter(app =>
@@ -93,29 +99,54 @@ export default function AppRouting() {
     );
   }, [allApps, searchTerm]);
 
+  const setPolicy = async (appPath: string, policy: AppRoutePolicy) => {
+    try {
+      const result = await window.electronAPI.routing.setAppPolicy(appPath, policy);
+      if (result.success) {
+        setAppPolicies(prev => {
+          const withoutCurrent = prev.filter(rule => rule.appPath !== appPath);
+          if (policy === 'none') {
+            return withoutCurrent;
+          }
+          const app = allApps.find(item => item.path === appPath);
+          return [...withoutCurrent, { appPath, appName: app?.name || appPath, policy }];
+        });
+      }
+    } catch (error) {
+      console.error('Error setting app policy:', error);
+    }
+  };
+
   const handleLaunchWithProxy = async (appPath: string) => {
     try {
       const res = await window.electronAPI.routing.launchWithProxy(appPath);
       if (!res.success) {
-        console.error('Failed to launch:', res.error);
+        console.error('Failed to launch with proxy:', res.error);
       }
     } catch (error) {
       console.error('Error launching app with proxy:', error);
     }
   };
 
-  const isBrowsersIcon = (appName: string) => {
+  const isBrowserLike = (appName: string) => {
     const browsers = ['chrome', 'firefox', 'safari', 'edge', 'brave', 'opera'];
     return browsers.some(b => appName.toLowerCase().includes(b));
   };
 
   const getAppIcon = (appName: string) => {
-    if (isBrowsersIcon(appName)) return <NetIcon sx={{ color: '#6366f1' }} />;
+    if (isBrowserLike(appName)) return <NetIcon sx={{ color: '#6366f1' }} />;
     return <AppsIcon sx={{ color: '#94a3b8' }} />;
   };
 
-  const isAppBypassed = (appPath: string) => {
-    return bypassApps.some(app => app.appPath === appPath && app.shouldBypass);
+  const getPolicyLabel = (policy: AppRoutePolicy): string => {
+    switch (policy) {
+      case 'bypass':
+        return 'Bypass VPN';
+      case 'vpn':
+        return 'Use VPN';
+      default:
+        return 'Follow Global Mode';
+    }
   };
 
   if (loading) {
@@ -133,8 +164,11 @@ export default function AppRouting() {
           <Typography variant="h4" sx={{ fontWeight: 700, mb: 1, letterSpacing: '-0.02em' }}>
             Application Routing
           </Typography>
-          <Typography variant="body1" sx={{ color: '#94a3b8', mb: 3 }}>
-            Fine-tune which applications use the VPN tunnel.
+          <Typography variant="body1" sx={{ color: '#94a3b8', mb: 1 }}>
+            Define per-app network policy independent from global VPN mode.
+          </Typography>
+          <Typography variant="caption" sx={{ color: '#64748b', display: 'block', mb: 3 }}>
+            Bypass: {bypassCount} apps | Use VPN: {vpnCount} apps
           </Typography>
 
           <Card className="glass" sx={{ border: 'none', background: 'rgba(30, 41, 59, 0.4)' }}>
@@ -157,7 +191,7 @@ export default function AppRouting() {
                   '& .MuiInputBase-input': {
                     color: '#f8fafc',
                     py: 1.5,
-                    fontSize: '1.1rem'
+                    fontSize: '1.1rem',
                   },
                 }}
               />
@@ -165,95 +199,70 @@ export default function AppRouting() {
           </Card>
         </Box>
 
-        {/* Bypassed Section */}
-        {bypassApps.length > 0 && !searchTerm && (
-          <Box sx={{ mb: 4 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-              <BypassIcon sx={{ fontSize: 18, color: '#f59e0b' }} />
-              <Typography variant="overline" sx={{ fontWeight: 700, color: '#f59e0b', letterSpacing: '0.1em' }}>
-                Bypassing VPN ({bypassApps.length})
-              </Typography>
-            </Box>
-            <Card sx={{ backgroundColor: '#1e293b', borderRadius: 3, border: '1px solid rgba(245, 158, 11, 0.2)' }}>
-              <List disablePadding>
-                {bypassApps.map((app, index) => (
-                  <React.Fragment key={app.appPath}>
+        <Box sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <ProxyIcon sx={{ fontSize: 18, color: '#6366f1' }} />
+          <Typography variant="overline" sx={{ fontWeight: 700, color: '#6366f1', letterSpacing: '0.1em' }}>
+            Application Policies ({filteredApps.length})
+          </Typography>
+        </Box>
+
+        <Card sx={{ backgroundColor: '#1e293b', borderRadius: 3, overflow: 'hidden' }}>
+          <List disablePadding>
+            {filteredApps.length > 0 ? (
+              filteredApps.map((app, index) => {
+                const policy = policyByPath.get(app.path) || 'none';
+                const isBypass = policy === 'bypass';
+                return (
+                  <React.Fragment key={app.path}>
                     {index > 0 && <Divider sx={{ borderColor: 'rgba(255,255,255,0.05)' }} />}
                     <ListItem disablePadding>
-                      <ListItemButton
-                        onClick={() => handleToggleApp(app.appPath)}
-                        sx={{ py: 2, '&:hover': { backgroundColor: 'rgba(245, 158, 11, 0.05)' } }}
-                      >
-                        <ListItemIcon sx={{ minWidth: 48 }}>{getAppIcon(app.appName)}</ListItemIcon>
+                      <ListItemButton sx={{ py: 2, '&:hover': { backgroundColor: 'rgba(99, 102, 241, 0.05)' } }}>
+                        <ListItemIcon sx={{ minWidth: 48 }}>{getAppIcon(app.name)}</ListItemIcon>
                         <ListItemText
-                          primary={app.appName}
-                          secondary={app.appPath}
-                          primaryTypographyProps={{ sx: { fontWeight: 500 } }}
+                          primary={app.name}
+                          secondary={`${app.path} · ${getPolicyLabel(policy)}`}
+                          primaryTypographyProps={{ sx: { fontWeight: 500, color: isBypass ? '#fbbf24' : '#f8fafc' } }}
                           secondaryTypographyProps={{ sx: { color: '#64748b', fontSize: '0.75rem' } }}
                         />
                         <Tooltip title="Launch with Proxy">
                           <IconButton
-                            onClick={(e) => { e.stopPropagation(); handleLaunchWithProxy(app.appPath); }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleLaunchWithProxy(app.path);
+                            }}
                             sx={{ color: '#94a3b8', mr: 1 }}
                           >
                             <LaunchIcon fontSize="small" />
                           </IconButton>
                         </Tooltip>
-                        <Switch
-                          edge="end"
-                          color="warning"
-                          checked={!app.shouldBypass}
-                          onChange={(e) => { e.stopPropagation(); handleToggleApp(app.appPath); }}
-                        />
-                      </ListItemButton>
-                    </ListItem>
-                  </React.Fragment>
-                ))}
-              </List>
-            </Card>
-          </Box>
-        )}
-
-        {/* All Apps Section */}
-        <Box sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
-          <ProxyIcon sx={{ fontSize: 18, color: '#6366f1' }} />
-          <Typography variant="overline" sx={{ fontWeight: 700, color: '#6366f1', letterSpacing: '0.1em' }}>
-            Available Applications ({filteredApps.length})
-          </Typography>
-        </Box>
-        <Card sx={{ backgroundColor: '#1e293b', borderRadius: 3, overflow: 'hidden' }}>
-          <List disablePadding>
-            {filteredApps.length > 0 ? (
-              filteredApps.map((app, index) => {
-                const bypassed = isAppBypassed(app.path);
-                return (
-                  <React.Fragment key={app.path}>
-                    {index > 0 && <Divider sx={{ borderColor: 'rgba(255,255,255,0.05)' }} />}
-                    <ListItem disablePadding>
-                      <ListItemButton
-                        onClick={() => handleToggleApp(app.path)}
-                        sx={{ py: 2, '&:hover': { backgroundColor: 'rgba(99, 102, 241, 0.05)' } }}
-                      >
-                        <ListItemIcon sx={{ minWidth: 48 }}>{getAppIcon(app.name)}</ListItemIcon>
-                        <ListItemText
-                          primary={app.name}
-                          secondary={app.path}
-                          primaryTypographyProps={{ sx: { fontWeight: 500, color: bypassed ? '#64748b' : '#f8fafc' } }}
-                          secondaryTypographyProps={{ sx: { color: '#475569', fontSize: '0.75rem' } }}
-                        />
-                        <Tooltip title="Launch with Proxy">
-                          <IconButton
-                            onClick={(e) => { e.stopPropagation(); handleLaunchWithProxy(app.path); }}
-                            sx={{ color: '#475569', mr: 1 }}
-                          >
-                            <LaunchIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
-                        <Switch
-                          edge="end"
-                          checked={!bypassed}
-                          onChange={(e) => { e.stopPropagation(); handleToggleApp(app.path); }}
-                        />
+                        <Select
+                          size="small"
+                          value={policy}
+                          onChange={(e) => {
+                            e.stopPropagation();
+                            setPolicy(app.path, e.target.value as AppRoutePolicy);
+                          }}
+                          sx={{
+                            minWidth: 160,
+                            color: '#e2e8f0',
+                            '& .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(148, 163, 184, 0.35)' },
+                            '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(148, 163, 184, 0.6)' },
+                          }}
+                        >
+                          <MenuItem value="none">Follow Global</MenuItem>
+                          <MenuItem value="bypass">
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                              <BypassIcon sx={{ fontSize: 16, color: '#f59e0b' }} />
+                              Bypass VPN
+                            </Box>
+                          </MenuItem>
+                          <MenuItem value="vpn">
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                              <ProxyIcon sx={{ fontSize: 16, color: '#22c55e' }} />
+                              Use VPN
+                            </Box>
+                          </MenuItem>
+                        </Select>
                       </ListItemButton>
                     </ListItem>
                   </React.Fragment>

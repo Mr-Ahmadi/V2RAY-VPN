@@ -148,6 +148,7 @@ export const initializeDatabase = async () => {
         appPath TEXT UNIQUE NOT NULL,
         appName TEXT NOT NULL,
         shouldBypass BOOLEAN DEFAULT FALSE,
+        policy TEXT DEFAULT 'none',
         createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
@@ -394,6 +395,26 @@ export const runAsync = (query: string, params: any[] = []): Promise<any> => {
             const filtered = table.filter(r => r.id !== idToDelete);
             memoryStorage[tableName] = filtered;
             console.log(`[Database] Deleted from ${tableName}. Records: ${initialLength} -> ${filtered.length}`);
+            return { changes: initialLength - filtered.length };
+          }
+
+          const appPathMatch = whereClause.match(/appPath\s*=\s*\?/i);
+          if (appPathMatch && params.length > 0) {
+            const appPathToDelete = params[0];
+            const initialLength = table.length;
+            const filtered = table.filter(r => r.appPath !== appPathToDelete);
+            memoryStorage[tableName] = filtered;
+            console.log(`[Database] Deleted from ${tableName} by appPath. Records: ${initialLength} -> ${filtered.length}`);
+            return { changes: initialLength - filtered.length };
+          }
+
+          const keyMatch = whereClause.match(/key\s*=\s*\?/i);
+          if (keyMatch && params.length > 0) {
+            const keyToDelete = params[0];
+            const initialLength = table.length;
+            const filtered = table.filter(r => r.key !== keyToDelete);
+            memoryStorage[tableName] = filtered;
+            console.log(`[Database] Deleted from ${tableName} by key. Records: ${initialLength} -> ${filtered.length}`);
             return { changes: initialLength - filtered.length };
           }
           return { changes: 0 };

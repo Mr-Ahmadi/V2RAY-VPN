@@ -424,6 +424,26 @@ const setupIPCHandlers = () => {
     }
   });
 
+  ipcMain.handle('routing:setAppPolicy', async (_: any, appPath: string, policy: 'none' | 'bypass' | 'vpn') => {
+    try {
+      if (!appRoutingService) throw new Error('AppRouting service not initialized');
+      await appRoutingService.setAppPolicy(appPath, policy);
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('routing:getAppPolicies', async () => {
+    try {
+      if (!appRoutingService) throw new Error('AppRouting service not initialized');
+      const apps = await appRoutingService.getAppRoutingRules();
+      return { success: true, data: apps };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
   // Settings handlers
   ipcMain.handle('settings:get', async () => {
     try {

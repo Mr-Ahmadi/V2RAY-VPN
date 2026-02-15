@@ -17,6 +17,8 @@ declare global {
         getApps: () => Promise<any>;
         setAppBypass: (appPath: string, shouldBypass: boolean) => Promise<any>;
         getBypassApps: () => Promise<any>;
+        setAppPolicy: (appPath: string, policy: 'none' | 'bypass' | 'vpn') => Promise<any>;
+        getAppPolicies: () => Promise<any>;
         launchWithProxy: (appPath: string) => Promise<any>;
       };
       settings: {
