@@ -15,6 +15,8 @@ export interface Server {
 
 export interface ConnectionStatus {
   connected: boolean;
+  state: 'disconnected' | 'connecting' | 'connected' | 'disconnecting' | 'error';
+  error?: string;
   currentServer?: Server;
   connectedAt?: number;
   uploadSpeed?: number;

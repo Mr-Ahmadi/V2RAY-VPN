@@ -83,6 +83,7 @@ export class DebugLogger {
 
   private appendToFile(entry: LogEntry) {
     try {
+      fs.mkdirSync(path.dirname(this.logFilePath), { recursive: true });
       const line = JSON.stringify(entry) + '\n';
       fs.appendFileSync(this.logFilePath, line, 'utf-8');
     } catch (error) {
@@ -112,6 +113,7 @@ export class DebugLogger {
   clearLogs(): void {
     this.logs = [];
     try {
+      fs.mkdirSync(path.dirname(this.logFilePath), { recursive: true });
       fs.writeFileSync(this.logFilePath, '', 'utf-8');
     } catch (error) {
       console.error('[DebugLogger] Failed to clear log file:', error);

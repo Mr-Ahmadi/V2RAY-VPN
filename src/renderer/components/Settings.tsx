@@ -14,57 +14,19 @@ import {
   FormControl,
   InputLabel,
   CircularProgress,
-  List,
-  ListItem,
-  ListItemButton,
-  ListItemIcon,
-  ListItemText,
-  Checkbox,
+  Grid,
 } from '@mui/material';
 
 export default function Settings() {
   const [settings, setSettings] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [apps, setApps] = useState<any[]>([]);
-  const [bypassApps, setBypassApps] = useState<string[]>([]);
-  const [loadingApps, setLoadingApps] = useState(false);
   const [routingMode, setRoutingMode] = useState<'full' | 'bypass' | 'rule'>('full');
   const [proxyMode, setProxyMode] = useState<'global' | 'per-app' | 'pac'>('global');
 
   useEffect(() => {
     loadSettings();
   }, []);
-
-  useEffect(() => {
-    loadApps();
-    loadBypassApps();
-  }, []);
-
-  const loadApps = async () => {
-    try {
-      setLoadingApps(true);
-      const result = await window.electronAPI.routing.getApps();
-      if (result.success) {
-        setApps(result.data);
-      }
-    } catch (error) {
-      console.error('Error loading apps:', error);
-    } finally {
-      setLoadingApps(false);
-    }
-  };
-
-  const loadBypassApps = async () => {
-    try {
-      const result = await window.electronAPI.routing.getBypassApps();
-      if (result.success) {
-        setBypassApps(result.data.map((app: any) => app.appPath));
-      }
-    } catch (error) {
-      console.error('Error loading bypass apps:', error);
-    }
-  };
 
   const loadSettings = async () => {
     try {
@@ -102,20 +64,6 @@ export default function Settings() {
     setSettings(prev => ({ ...prev, [key]: value }));
   };
 
-  const handleToggleAppBypass = async (appPath: string) => {
-    try {
-      const isBypass = bypassApps.includes(appPath);
-      await window.electronAPI.routing.setAppBypass(appPath, !isBypass);
-      if (isBypass) {
-        setBypassApps(bypassApps.filter(p => p !== appPath));
-      } else {
-        setBypassApps([...bypassApps, appPath]);
-      }
-    } catch (error) {
-      console.error('Error toggling app bypass:', error);
-    }
-  };
-
   if (loading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
@@ -125,14 +73,16 @@ export default function Settings() {
   }
 
   return (
-    <Box sx={{ py: 3 }}>
-      <Container maxWidth="sm">
-        <Typography variant="h5" sx={{ fontWeight: 600, mb: 3 }}>
+    <Box sx={{ py: { xs: 2, sm: 3 } }}>
+      <Container maxWidth="lg">
+        <Typography variant="h5" sx={{ fontWeight: 700, mb: 3 }}>
           Settings
         </Typography>
 
-        <Card sx={{ backgroundColor: '#1e293b', mb: 2 }}>
-          <CardContent>
+        <Grid container spacing={2}>
+          <Grid item xs={12} md={6}>
+            <Card sx={{ backgroundColor: 'var(--bg-card)', height: '100%' }}>
+              <CardContent>
             <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
               Connection
             </Typography>
@@ -167,11 +117,13 @@ export default function Settings() {
               }
               label="Show ping when connected"
             />
-          </CardContent>
-        </Card>
+              </CardContent>
+            </Card>
+          </Grid>
 
-        <Card sx={{ backgroundColor: '#1e293b', mb: 2 }}>
-          <CardContent>
+          <Grid item xs={12} md={6}>
+            <Card sx={{ backgroundColor: 'var(--bg-card)', height: '100%' }}>
+              <CardContent>
             <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
               DNS Settings
             </Typography>
@@ -227,11 +179,13 @@ export default function Settings() {
             <Typography variant="caption" color="textSecondary">
               Uses V2Ray's built-in ad blocking rules
             </Typography>
-          </CardContent>
-        </Card>
+              </CardContent>
+            </Card>
+          </Grid>
 
-        <Card sx={{ backgroundColor: '#1e293b', mb: 2 }}>
-          <CardContent>
+          <Grid item xs={12} md={6}>
+            <Card sx={{ backgroundColor: 'var(--bg-card)', height: '100%' }}>
+              <CardContent>
             <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
               Security
             </Typography>
@@ -260,11 +214,13 @@ export default function Settings() {
             <Typography variant="caption" color="textSecondary">
               Recommended if your VPN server doesn't support IPv6
             </Typography>
-          </CardContent>
-        </Card>
+              </CardContent>
+            </Card>
+          </Grid>
 
-        <Card sx={{ backgroundColor: '#1e293b', mb: 2 }}>
-          <CardContent>
+          <Grid item xs={12} md={6}>
+            <Card sx={{ backgroundColor: 'var(--bg-card)', height: '100%' }}>
+              <CardContent>
             <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
               Network
             </Typography>
@@ -324,13 +280,19 @@ export default function Settings() {
                     <MenuItem value="rule">Route selected apps through proxy (in Routing tab)</MenuItem>
                   </Select>
                 </FormControl>
+                <Typography variant="caption" sx={{ display: 'block', mt: 1, color: 'text.secondary' }}>
+                  Some apps ignore system proxy settings. Use the Routing tab to launch apps directly with the
+                  desired policy.
+                </Typography>
               </Box>
             </Box>
-          </CardContent>
-        </Card>
+              </CardContent>
+            </Card>
+          </Grid>
 
-        <Card sx={{ backgroundColor: '#1e293b', mb: 3 }}>
-          <CardContent>
+          <Grid item xs={12}>
+            <Card sx={{ backgroundColor: 'var(--bg-card)' }}>
+              <CardContent>
             <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
               Privacy
             </Typography>
@@ -343,14 +305,16 @@ export default function Settings() {
               }
               label="Help improve by sharing anonymous usage data"
             />
-          </CardContent>
-        </Card>
+              </CardContent>
+            </Card>
+          </Grid>
+        </Grid>
 
-        <Box sx={{ display: 'flex', gap: 2 }}>
+        <Box sx={{ display: 'flex', gap: 2, mt: 3, flexDirection: { xs: 'column', sm: 'row' } }}>
           <Button
             variant="outlined"
             onClick={loadSettings}
-            sx={{ flex: 1 }}
+            sx={{ flex: 1, minHeight: 44 }}
           >
             Reset
           </Button>
@@ -360,7 +324,8 @@ export default function Settings() {
             disabled={saving}
             sx={{
               flex: 1,
-              background: 'linear-gradient(90deg, #6366f1, #ec4899)',
+              minHeight: 44,
+              background: 'linear-gradient(90deg, var(--primary), var(--accent))',
             }}
           >
             {saving ? <CircularProgress size={24} /> : 'Save Settings'}

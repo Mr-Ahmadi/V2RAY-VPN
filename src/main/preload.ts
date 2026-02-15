@@ -27,6 +27,11 @@ const electronAPI = {
       ipcRenderer.invoke('routing:setAppPolicy', appPath, policy),
     getAppPolicies: () => ipcRenderer.invoke('routing:getAppPolicies'),
     launchWithProxy: (appPath: string) => ipcRenderer.invoke('routing:launchWithProxy', appPath),
+    launchDirect: (appPath: string) => ipcRenderer.invoke('routing:launchDirect', appPath),
+    getDiagnostics: () => ipcRenderer.invoke('routing:getDiagnostics'),
+    getRules: () => ipcRenderer.invoke('routing:getRules'),
+    addRule: (rule: any) => ipcRenderer.invoke('routing:addRule', rule),
+    removeRule: (ruleId: number) => ipcRenderer.invoke('routing:removeRule', ruleId),
   },
 
   // Settings

@@ -2,11 +2,37 @@ import { execSync, spawnSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import debugLogger from './debugLogger.js';
+
+interface PacRoutingOptions {
+  socksHost?: string;
+  socksPort?: number;
+  httpHost?: string;
+  httpPort?: number;
+  directDomains?: string[];
+  proxyDomains?: string[];
+}
 
 export class SystemProxyManager {
   private static readonly SOCKS_PORT = 10808;
   private static readonly HTTP_PORT = 10809;
   private proxyEnabled = false;
+  private lastPacInfo: Record<string, any> | null = null;
+
+  private parseNetworkSetupOutput(output: string): Record<string, string> {
+    return output
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean)
+      .reduce((acc, line) => {
+        const separatorIndex = line.indexOf(':');
+        if (separatorIndex <= 0) return acc;
+        const key = line.slice(0, separatorIndex).trim();
+        const value = line.slice(separatorIndex + 1).trim();
+        acc[key] = value;
+        return acc;
+      }, {} as Record<string, string>);
+  }
 
   private getNetworkServices(): string[] {
     try {
@@ -335,8 +361,164 @@ export class SystemProxyManager {
     }
   }
 
+  private escapePacString(value: string): string {
+    return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  }
+
+  private normalizeDomainList(values: string[] | undefined): string[] {
+    if (!Array.isArray(values)) return [];
+    return Array.from(
+      new Set(
+        values
+          .map((value) => String(value || '').trim().toLowerCase())
+          .filter(Boolean)
+      )
+    );
+  }
+
+  private buildPacContent(options: PacRoutingOptions = {}): string {
+    const socksHost = options.socksHost || '127.0.0.1';
+    const socksPort = Number(options.socksPort || SystemProxyManager.SOCKS_PORT);
+    const httpHost = options.httpHost || '127.0.0.1';
+    const httpPort = Number(options.httpPort || SystemProxyManager.HTTP_PORT);
+    const directDomains = this.normalizeDomainList([
+      'localhost',
+      'local',
+      ...(options.directDomains || []),
+    ]);
+    const proxyDomains = this.normalizeDomainList(options.proxyDomains);
+
+    const directDomainJson = JSON.stringify(directDomains);
+    const proxyDomainJson = JSON.stringify(proxyDomains);
+    const proxyChain = `SOCKS5 ${this.escapePacString(socksHost)}:${socksPort}; PROXY ${this.escapePacString(httpHost)}:${httpPort}; DIRECT`;
+
+    return `function FindProxyForURL(url, host) {
+  host = (host || "").toLowerCase();
+  if (!host) return "DIRECT";
+  if (isPlainHostName(host) || shExpMatch(host, "*.local")) return "DIRECT";
+  if (host === "localhost" || host === "127.0.0.1" || host === "::1") return "DIRECT";
+
+  var directDomains = ${directDomainJson};
+  for (var i = 0; i < directDomains.length; i++) {
+    var directDomain = directDomains[i];
+    if (!directDomain) continue;
+    if (dnsDomainIs(host, directDomain) || shExpMatch(host, "*." + directDomain)) {
+      return "DIRECT";
+    }
+  }
+
+  var proxyDomains = ${proxyDomainJson};
+  for (var j = 0; j < proxyDomains.length; j++) {
+    var proxyDomain = proxyDomains[j];
+    if (!proxyDomain) continue;
+    if (dnsDomainIs(host, proxyDomain) || shExpMatch(host, "*." + proxyDomain)) {
+      return "${proxyChain}";
+    }
+  }
+
+  return "${proxyChain}";
+}`;
+  }
+
+  async enableDynamicPac(userDataPath: string, options: PacRoutingOptions = {}): Promise<{ pacPath: string; pacUrl: string }> {
+    const pacDir = path.join(userDataPath, 'pac');
+    const pacPath = path.join(pacDir, 'proxy.pac');
+    const pacUrl = `file://${pacPath}`;
+    const pacContent = this.buildPacContent(options);
+
+    if (!fs.existsSync(pacDir)) {
+      fs.mkdirSync(pacDir, { recursive: true });
+    }
+    fs.writeFileSync(pacPath, pacContent, 'utf-8');
+
+    this.lastPacInfo = {
+      generatedAt: new Date().toISOString(),
+      pacPath,
+      pacUrl,
+      options: {
+        socksHost: options.socksHost || '127.0.0.1',
+        socksPort: options.socksPort || SystemProxyManager.SOCKS_PORT,
+        httpHost: options.httpHost || '127.0.0.1',
+        httpPort: options.httpPort || SystemProxyManager.HTTP_PORT,
+        directDomains: this.normalizeDomainList(options.directDomains),
+        proxyDomains: this.normalizeDomainList(options.proxyDomains),
+      },
+    };
+
+    debugLogger.info('SystemProxyManager', 'Generated PAC file', this.lastPacInfo);
+    await this.enableAutoProxy(pacUrl);
+    debugLogger.info('SystemProxyManager', 'Enabled PAC routing', { pacUrl });
+    return { pacPath, pacUrl };
+  }
+
+  getPacSnapshot(): Record<string, any> | null {
+    if (!this.lastPacInfo) return null;
+    return {
+      ...this.lastPacInfo,
+      proxyEnabled: this.proxyEnabled,
+    };
+  }
+
   isProxyEnabled(): boolean {
     return this.proxyEnabled;
+  }
+
+  getSystemProxySnapshot(): Record<string, any> {
+    if (process.platform !== 'darwin') {
+      return {
+        platform: process.platform,
+        supported: false,
+        reason: 'System proxy snapshot is currently implemented for macOS only',
+      };
+    }
+
+    const services = this.getNetworkServices();
+    const snapshot = services.map(service => {
+      const read = (command: string) => {
+        try {
+          return execSync(command, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] });
+        } catch {
+          return '';
+        }
+      };
+
+      const web = this.parseNetworkSetupOutput(read(`networksetup -getwebproxy "${service}"`));
+      const secureWeb = this.parseNetworkSetupOutput(read(`networksetup -getsecurewebproxy "${service}"`));
+      const socks = this.parseNetworkSetupOutput(read(`networksetup -getsocksfirewallproxy "${service}"`));
+      const autoProxy = this.parseNetworkSetupOutput(read(`networksetup -getautoproxyurl "${service}"`));
+
+      return {
+        service,
+        web: {
+          enabled: web['Enabled'] === 'Yes',
+          server: web['Server'],
+          port: web['Port'],
+        },
+        secureWeb: {
+          enabled: secureWeb['Enabled'] === 'Yes',
+          server: secureWeb['Server'],
+          port: secureWeb['Port'],
+        },
+        socks: {
+          enabled: socks['Enabled'] === 'Yes',
+          server: socks['Server'],
+          port: socks['Port'],
+        },
+        autoProxy: {
+          enabled: autoProxy['Enabled'] === 'Yes',
+          url: autoProxy['URL'],
+        },
+      };
+    });
+
+    return {
+      platform: 'darwin',
+      supported: true,
+      proxyEnabledFlag: this.proxyEnabled,
+      pac: this.getPacSnapshot(),
+      services: snapshot,
+      capturedAt: new Date().toISOString(),
+    };
   }
 }
 

@@ -3,16 +3,19 @@ import {
   AppBar,
   Toolbar,
   Typography,
-  Button,
   Menu,
   MenuItem,
   Box,
   Chip,
+  IconButton,
+  Tooltip,
 } from '@mui/material';
 import {
   MoreVert as MoreIcon,
   VpnKey as VpnIcon,
+  BugReport as BugIcon,
 } from '@mui/icons-material';
+import LogViewer from './LogViewer';
 
 interface ConnectionStatus {
   connected: boolean;
@@ -22,6 +25,7 @@ interface ConnectionStatus {
 export default function Navbar() {
   const [anchorEl, setAnchorEl] = React.useState<null | HTMLElement>(null);
   const [status, setStatus] = useState<ConnectionStatus>({ connected: false });
+  const [logsOpen, setLogsOpen] = useState(false);
 
   useEffect(() => {
     // Poll connection status
@@ -60,57 +64,87 @@ export default function Navbar() {
   };
 
   return (
-    <AppBar
-      position="static"
-      sx={{
-        background: 'linear-gradient(90deg, #0f172a 0%, #1e293b 100%)',
-        borderBottom: '1px solid rgba(99, 102, 241, 0.1)',
-      }}
-    >
-      <Toolbar>
-        <Typography
-          variant="h6"
-          sx={{
-            flexGrow: 1,
-            fontWeight: 700,
-            background: 'linear-gradient(90deg, #6366f1, #ec4899)',
-            backgroundClip: 'text',
-            WebkitBackgroundClip: 'text',
-            WebkitTextFillColor: 'transparent',
-          }}
-        >
-          V2Ray VPN
-        </Typography>
+    <>
+      <AppBar
+        position="sticky"
+        sx={{
+          top: 0,
+          zIndex: theme => theme.zIndex.drawer + 2,
+          background: 'linear-gradient(90deg, rgba(17, 28, 39, 0.92) 0%, rgba(20, 34, 53, 0.9) 100%)',
+          backdropFilter: 'blur(10px)',
+          WebkitBackdropFilter: 'blur(10px)',
+          borderBottom: '1px solid var(--border-light)',
+          boxShadow: '0 10px 30px rgba(0, 0, 0, 0.2)',
+        }}
+      >
+        <Toolbar sx={{ minHeight: { xs: 56, sm: 64 }, px: { xs: 1.5, sm: 2.5 } }}>
+          <Typography
+            variant="h6"
+            sx={{
+              flexGrow: 1,
+              fontWeight: 700,
+              letterSpacing: 0.2,
+              background: 'linear-gradient(90deg, var(--primary), var(--accent))',
+              backgroundClip: 'text',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+            }}
+          >
+            V2Ray VPN
+          </Typography>
 
-        {status.connected && (
-          <>
-            <Box sx={{ mr: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
-              <VpnIcon sx={{ color: '#10b981', fontSize: 20 }} />
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Tooltip title="View Logs">
+              <IconButton onClick={() => setLogsOpen(true)} size="small" sx={{ color: 'var(--text-secondary)' }}>
+                <BugIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+
+            {!status.connected && (
               <Chip
-                label={status.currentServer?.name || 'Connected'}
+                label="Disconnected"
                 size="small"
                 sx={{
-                  backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                  color: '#10b981',
+                  backgroundColor: 'rgba(148, 163, 184, 0.14)',
+                  color: 'var(--text-secondary)',
+                  border: '1px solid rgba(148, 163, 184, 0.2)',
                 }}
               />
-            </Box>
-            <Button
-              id="menu-button"
-              onClick={handleMenuOpen}
-              color="inherit"
-              sx={{ minWidth: 40, '&:hover': { backgroundColor: 'rgba(99, 102, 241, 0.1)' } }}
-            >
-              <MoreIcon />
-            </Button>
-            <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={handleMenuClose}>
-              <MenuItem onClick={handleDisconnect} sx={{ color: '#ef4444' }}>
-                Disconnect VPN
-              </MenuItem>
-            </Menu>
-          </>
-        )}
-      </Toolbar>
-    </AppBar>
+            )}
+
+            {status.connected && (
+              <>
+                <Box sx={{ mr: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <VpnIcon sx={{ color: 'var(--success)', fontSize: 20 }} />
+                  <Chip
+                    label={status.currentServer?.name || 'Connected'}
+                    size="small"
+                    sx={{
+                      backgroundColor: 'rgba(34, 197, 94, 0.12)',
+                      color: 'var(--success)',
+                    }}
+                  />
+                </Box>
+                <IconButton
+                  id="menu-button"
+                  onClick={handleMenuOpen}
+                  color="inherit"
+                  sx={{ minWidth: 40, '&:hover': { backgroundColor: 'rgba(20, 184, 166, 0.12)' } }}
+                >
+                  <MoreIcon />
+                </IconButton>
+                <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={handleMenuClose}>
+                  <MenuItem onClick={handleDisconnect} sx={{ color: '#ef4444' }}>
+                    Disconnect VPN
+                  </MenuItem>
+                </Menu>
+              </>
+            )}
+          </Box>
+        </Toolbar>
+      </AppBar>
+
+      <LogViewer open={logsOpen} onClose={() => setLogsOpen(false)} />
+    </>
   );
 }

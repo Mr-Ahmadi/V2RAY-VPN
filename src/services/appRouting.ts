@@ -2,6 +2,7 @@ import { queryAsync, runAsync } from '../db/database.js';
 import { execSync } from 'child_process';
 import path from 'path';
 import os from 'os';
+import debugLogger from './debugLogger.js';
 
 export interface InstalledApp {
   name: string;
@@ -23,6 +24,17 @@ export interface AppRoutingRule {
   policy: AppRoutePolicy;
 }
 
+export type AppRoutingEngine = 'chromium' | 'firefox' | 'telegram' | 'safari' | 'generic';
+
+export interface AppRoutingCapability {
+  appPath: string;
+  appName: string;
+  engine: AppRoutingEngine;
+  canForceProxy: boolean;
+  canForceDirect: boolean;
+  reason: string;
+}
+
 export class AppRoutingService {
   private static readonly TELEGRAM_APP_NAMES = ['Telegram.app', 'Telegram Desktop.app', 'Telegram'];
   private static readonly PROXY_ENV_KEYS = [
@@ -41,6 +53,16 @@ export class AppRoutingService {
     (name: string) => name.replace(/\s+/g, '-'),
     (name: string) => name.replace(/\s+/g, '_'),
   ];
+  private static readonly CHROMIUM_APP_MARKERS = [
+    'chrome',
+    'chromium',
+    'edge',
+    'brave',
+    'opera',
+    'vivaldi',
+    'arc',
+  ];
+  private static readonly FIREFOX_APP_MARKERS = ['firefox', 'librewolf', 'waterfox'];
 
   private isExecutableFile(fsModule: any, filePath: string): boolean {
     try {
@@ -49,6 +71,10 @@ export class AppRoutingService {
     } catch {
       return false;
     }
+  }
+
+  private escapeShellDoubleQuoted(value: string): string {
+    return value.replace(/(["\\$`])/g, '\\$1');
   }
 
   private readMacBundleExecutableName(appPath: string): string | null {
@@ -132,6 +158,146 @@ export class AppRoutingService {
     }
 
     return null;
+  }
+
+  private getMacProcessNameCandidates(appPath: string): string[] {
+    const appName = path.basename(appPath).replace(/\.app$/i, '');
+    const names = [appName];
+
+    if (process.platform === 'darwin' && appPath.endsWith('.app')) {
+      const bundleExecutableName = this.readMacBundleExecutableName(appPath);
+      if (bundleExecutableName) {
+        names.push(bundleExecutableName);
+      }
+    }
+
+    return Array.from(new Set(names.map(name => name.trim()).filter(Boolean)));
+  }
+
+  private getMacProcessSearchPatterns(appPath: string): string[] {
+    const patterns: string[] = [];
+    if (appPath.endsWith('.app')) {
+      const executablePath = this.resolveMacBundleExecutable(appPath);
+      if (executablePath) {
+        patterns.push(executablePath);
+      }
+      patterns.push(path.join(appPath, 'Contents', 'MacOS') + path.sep);
+    }
+    for (const candidate of this.getMacProcessNameCandidates(appPath)) {
+      patterns.push(candidate);
+    }
+    return Array.from(new Set(patterns.map(pattern => pattern.trim()).filter(Boolean)));
+  }
+
+  private getDarwinProcessIdsByPattern(pattern: string): number[] {
+    try {
+      const output = execSync(`pgrep -f "${this.escapeShellDoubleQuoted(pattern)}"`, {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      if (!output) return [];
+      return output
+        .split('\n')
+        .map(value => Number(value.trim()))
+        .filter(value => Number.isInteger(value) && value > 0);
+    } catch {
+      return [];
+    }
+  }
+
+  private getDarwinProcessIds(appPath: string): number[] {
+    const pidSet = new Set<number>();
+    const patterns = this.getMacProcessSearchPatterns(appPath);
+    for (const pattern of patterns) {
+      for (const pid of this.getDarwinProcessIdsByPattern(pattern)) {
+        pidSet.add(pid);
+      }
+    }
+    return Array.from(pidSet.values());
+  }
+
+  private async waitForAppRunningState(appPath: string, targetRunning: boolean, timeoutMs: number = 5000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const running = this.isAppRunning(appPath);
+      if (running === targetRunning) {
+        return true;
+      }
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    return this.isAppRunning(appPath) === targetRunning;
+  }
+
+  private detectAppEngine(appPath: string): AppRoutingEngine {
+    const appName = path.basename(appPath).replace(/\.app$/i, '').toLowerCase();
+    if (AppRoutingService.CHROMIUM_APP_MARKERS.some(name => appName.includes(name))) {
+      return 'chromium';
+    }
+    if (AppRoutingService.FIREFOX_APP_MARKERS.some(name => appName.includes(name))) {
+      return 'firefox';
+    }
+    if (appName.includes('telegram')) {
+      return 'telegram';
+    }
+    if (appName.includes('safari')) {
+      return 'safari';
+    }
+    return 'generic';
+  }
+
+  getAppRoutingCapability(appPath: string): AppRoutingCapability {
+    const appName = path.basename(appPath).replace(/\.app$/i, '');
+    const engine = this.detectAppEngine(appPath);
+    if (engine === 'chromium') {
+      return {
+        appPath,
+        appName,
+        engine,
+        canForceProxy: true,
+        canForceDirect: true,
+        reason: 'Chromium CLI flags reliably override proxy settings for this app.',
+      };
+    }
+    if (engine === 'firefox') {
+      return {
+        appPath,
+        appName,
+        engine,
+        canForceProxy: true,
+        canForceDirect: true,
+        reason: 'Firefox: relaunch with env vars. Restart required for changes to take effect.',
+      };
+    }
+    if (engine === 'telegram') {
+      return {
+        appPath,
+        appName,
+        engine,
+        canForceProxy: true,
+        canForceDirect: true,
+        reason: 'Telegram: SOCKS proxy URL scheme + env vars. May need manual confirmation in app.',
+      };
+    }
+    if (engine === 'safari') {
+      // Safari follows system-level proxy rules. We mark direct as "capable" in
+      // best-effort mode so policy flows remain consistent across all apps.
+      return {
+        appPath,
+        appName,
+        engine,
+        canForceProxy: true,
+        canForceDirect: true,
+        reason: 'Safari follows macOS proxy/PAC settings. Direct mode is best-effort and depends on active system proxy mode.',
+      };
+    }
+    return {
+      appPath,
+      appName,
+      engine,
+      canForceProxy: true,
+      canForceDirect: true,
+      reason: 'Relaunch with env vars. May require app restart for changes to take effect.',
+    };
   }
 
   async getInstalledApps(): Promise<InstalledApp[]> {
@@ -340,6 +506,14 @@ export class AppRoutingService {
     try {
       const { spawn } = require('child_process');
       const fs = require('fs');
+      const appName = path.basename(appPath).replace(/\.app$/i, '').toLowerCase();
+      const proxyArgs = this.getProxyArgsForApp(appName);
+      const capability = this.getAppRoutingCapability(appPath);
+      debugLogger.info('AppRoutingService', 'Launching app with proxy', {
+        appPath,
+        engine: capability.engine,
+        proxyArgs,
+      });
 
       // Build proxy environment variables for common proxy-aware apps
       const env = {
@@ -355,19 +529,57 @@ export class AppRoutingService {
         NO_PROXY: '127.0.0.1,localhost',
       } as NodeJS.ProcessEnv;
 
-      // macOS .app bundles: attempt to find an executable inside Contents/MacOS
+      // Safari follows system proxy automatically — no need to relaunch.
+      // Just ensure system proxy is set (which the VPN connection already does).
+      if (capability.engine === 'safari') {
+        debugLogger.info('AppRoutingService', 'Safari follows system proxy — VPN routing is automatic', { appPath });
+        // Open Safari normally; system proxy will route its traffic through VPN.
+        spawn('open', ['-a', appPath], { detached: true, stdio: 'ignore' }).unref();
+        return;
+      }
+
+      // Telegram: use tg:// SOCKS URL scheme for reliable proxy configuration
+      if (capability.engine === 'telegram') {
+        debugLogger.info('AppRoutingService', 'Telegram: using SOCKS URL scheme + env var launch', { appPath });
+        await this.bootstrapTelegramLocalSocksProxy('127.0.0.1', 10808);
+        // Also launch with env vars as belt-and-suspenders
+      }
+
+      // macOS .app bundles: run executable directly so env vars are inherited.
       if (process.platform === 'darwin' && appPath.endsWith('.app')) {
         const executablePath = this.resolveMacBundleExecutable(appPath);
         if (executablePath) {
-          const child = spawn(executablePath, [], { env, detached: true, stdio: 'ignore' });
+          debugLogger.info('AppRoutingService', 'Launching bundle executable directly with proxy env', {
+            executablePath,
+            proxyArgs,
+          });
+          const child = spawn(executablePath, proxyArgs, { env, detached: true, stdio: 'ignore' });
           child.unref();
           return;
         }
 
-        // If no executable found, fallback to using `open` without custom env (best-effort)
+        // Fallback: use `open` but also try to set env via launchctl for the user session.
+        // This makes env vars available to apps launched via LaunchServices.
         try {
-          spawn('open', ['-a', appPath], { detached: true, stdio: 'ignore' }).unref();
-          console.warn('[AppRoutingService] Launched using open() but environment proxies may not apply');
+          const { execSync: execSyncFn } = require('child_process');
+          execSyncFn('launchctl setenv http_proxy http://127.0.0.1:10809', { stdio: 'ignore' });
+          execSyncFn('launchctl setenv https_proxy http://127.0.0.1:10809', { stdio: 'ignore' });
+          execSyncFn('launchctl setenv all_proxy socks5h://127.0.0.1:10808', { stdio: 'ignore' });
+          execSyncFn('launchctl setenv no_proxy 127.0.0.1,localhost', { stdio: 'ignore' });
+          debugLogger.info('AppRoutingService', 'Set proxy env via launchctl for LaunchServices apps');
+        } catch (e) {
+          debugLogger.warn('AppRoutingService', 'Could not set launchctl env vars', {
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+
+        const openArgs = ['-a', appPath];
+        if (proxyArgs.length > 0) {
+          openArgs.push('--args', ...proxyArgs);
+        }
+        try {
+          spawn('open', openArgs, { detached: true, stdio: 'ignore' }).unref();
+          debugLogger.info('AppRoutingService', 'Launched using open with proxy args', { openArgs });
           return;
         } catch (e) {
           throw new Error('No executable found inside .app bundle and `open` failed');
@@ -381,12 +593,11 @@ export class AppRoutingService {
           throw new Error('Expected executable file but got directory');
         }
       } catch (e) {
-        // stat failed or is directory
         const errorMsg = e instanceof Error ? e.message : String(e);
         throw new Error('Executable not found or not runnable: ' + errorMsg);
       }
 
-      const child = spawn(appPath, [], { env, detached: true, stdio: 'ignore' });
+      const child = spawn(appPath, proxyArgs, { env, detached: true, stdio: 'ignore' });
       child.unref();
       return;
     } catch (error) {
@@ -401,6 +612,9 @@ export class AppRoutingService {
       const fs = require('fs');
       const appName = path.basename(appPath).replace(/\.app$/i, '').toLowerCase();
       const env = { ...process.env } as NodeJS.ProcessEnv;
+      const capability = this.getAppRoutingCapability(appPath);
+
+      // Remove all proxy env vars so the app doesn't pick them up
       for (const key of AppRoutingService.PROXY_ENV_KEYS) {
         delete env[key];
       }
@@ -408,15 +622,58 @@ export class AppRoutingService {
       env.NO_PROXY = '*';
 
       const browserDirectArgs = this.getDirectProxyArgsForApp(appName);
+      debugLogger.info('AppRoutingService', 'Launching app direct (bypass)', {
+        appPath,
+        engine: capability.engine,
+        directArgs: browserDirectArgs,
+      });
 
-      // macOS .app bundles: run through `open` and pass direct-proxy args when supported
+      // Safari follows system proxy/PAC settings. In global proxy mode, direct launch
+      // is best-effort only because the process-level override is not available.
+      if (capability.engine === 'safari') {
+        debugLogger.warn(
+          'AppRoutingService',
+          'Safari direct launch is best-effort and follows current macOS proxy/PAC settings.',
+          { appPath }
+        );
+        spawn('open', ['-a', appPath], { detached: true, stdio: 'ignore' }).unref();
+        return;
+      }
+
+      // macOS .app bundles: run executable directly so env vars are inherited.
       if (process.platform === 'darwin' && appPath.endsWith('.app')) {
+        const executablePath = this.resolveMacBundleExecutable(appPath);
+        if (executablePath) {
+          debugLogger.info('AppRoutingService', 'Launching bundle executable directly in direct mode', {
+            executablePath,
+            directArgs: browserDirectArgs,
+          });
+          const child = spawn(executablePath, browserDirectArgs, { env, detached: true, stdio: 'ignore' });
+          child.unref();
+          return;
+        }
+
+        // Fallback: clear launchctl env vars so apps launched via LaunchServices go direct.
+        try {
+          const { execSync: execSyncFn } = require('child_process');
+          execSyncFn('launchctl unsetenv http_proxy 2>/dev/null || true', { stdio: 'ignore' });
+          execSyncFn('launchctl unsetenv https_proxy 2>/dev/null || true', { stdio: 'ignore' });
+          execSyncFn('launchctl unsetenv all_proxy 2>/dev/null || true', { stdio: 'ignore' });
+          execSyncFn('launchctl setenv no_proxy "*"', { stdio: 'ignore' });
+          debugLogger.info('AppRoutingService', 'Cleared proxy env via launchctl for direct launch');
+        } catch (e) {
+          debugLogger.warn('AppRoutingService', 'Could not clear launchctl env vars', {
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+
         const openArgs = ['-a', appPath];
         if (browserDirectArgs.length > 0) {
           openArgs.push('--args', ...browserDirectArgs);
         }
-        const child = spawn('open', openArgs, { env, detached: true, stdio: 'ignore' });
+        const child = spawn('open', openArgs, { detached: true, stdio: 'ignore' });
         child.unref();
+        debugLogger.info('AppRoutingService', 'Launched using open() in direct mode', { openArgs });
         return;
       }
 
@@ -441,16 +698,19 @@ export class AppRoutingService {
 
   private getDirectProxyArgsForApp(appName: string): string[] {
     // Chromium-family apps support these flags to force direct egress.
-    const chromiumLike = [
-      'chrome',
-      'chromium',
-      'edge',
-      'brave',
-      'opera',
-      'vivaldi',
-    ];
-    if (chromiumLike.some(name => appName.includes(name))) {
+    if (AppRoutingService.CHROMIUM_APP_MARKERS.some(name => appName.includes(name))) {
       return ['--proxy-server=direct://', '--proxy-bypass-list=*'];
+    }
+    return [];
+  }
+
+  private getProxyArgsForApp(appName: string): string[] {
+    // Chromium-family apps can be forced onto our local SOCKS proxy.
+    if (AppRoutingService.CHROMIUM_APP_MARKERS.some(name => appName.includes(name))) {
+      return [
+        '--proxy-server=socks5://127.0.0.1:10808',
+        '--proxy-bypass-list=<-loopback>',
+      ];
     }
     return [];
   }
@@ -507,13 +767,25 @@ export class AppRoutingService {
 
   isAppRunning(appPath: string): boolean {
     try {
-      const appName = path.basename(appPath).replace(/\.app$/i, '');
-
       if (process.platform === 'darwin') {
-        execSync(`pgrep -x "${appName.replace(/"/g, '\\"')}"`, { stdio: 'ignore' });
-        return true;
+        const pids = this.getDarwinProcessIds(appPath);
+        if (pids.length > 0) {
+          return true;
+        }
+
+        const candidates = this.getMacProcessNameCandidates(appPath);
+        for (const candidate of candidates) {
+          try {
+            execSync(`pgrep -x "${candidate.replace(/"/g, '\\"')}"`, { stdio: 'ignore' });
+            return true;
+          } catch {
+            // continue
+          }
+        }
+        return false;
       }
 
+      const appName = path.basename(appPath).replace(/\.app$/i, '');
       if (process.platform === 'win32') {
         const exeName = appPath.toLowerCase().endsWith('.exe') ? path.basename(appPath) : `${appName}.exe`;
         const output = execSync(`tasklist /FI "IMAGENAME eq ${exeName}"`, { encoding: 'utf-8' });
@@ -529,13 +801,39 @@ export class AppRoutingService {
 
   async stopApp(appPath: string): Promise<void> {
     try {
-      const appName = path.basename(appPath).replace(/\.app$/i, '');
-
       if (process.platform === 'darwin') {
-        execSync(`pkill -x "${appName.replace(/"/g, '\\"')}"`, { stdio: 'ignore' });
+        const pids = this.getDarwinProcessIds(appPath);
+        if (pids.length > 0) {
+          for (const pid of pids) {
+            try {
+              process.kill(pid, 'SIGTERM');
+            } catch {
+              // continue
+            }
+          }
+          await new Promise(resolve => setTimeout(resolve, 800));
+          for (const pid of pids) {
+            try {
+              process.kill(pid, 0);
+              process.kill(pid, 'SIGKILL');
+            } catch {
+              // process already exited
+            }
+          }
+        }
+
+        const candidates = this.getMacProcessNameCandidates(appPath);
+        for (const candidate of candidates) {
+          try {
+            execSync(`pkill -x "${candidate.replace(/"/g, '\\"')}"`, { stdio: 'ignore' });
+          } catch {
+            // continue
+          }
+        }
         return;
       }
 
+      const appName = path.basename(appPath).replace(/\.app$/i, '');
       if (process.platform === 'win32') {
         const exeName = appPath.toLowerCase().endsWith('.exe') ? path.basename(appPath) : `${appName}.exe`;
         execSync(`taskkill /IM "${exeName}" /F`, { stdio: 'ignore' });
@@ -552,13 +850,24 @@ export class AppRoutingService {
     const running = this.isAppRunning(appPath);
     if (running && restartIfRunning) {
       await this.stopApp(appPath);
-      await new Promise(resolve => setTimeout(resolve, 800));
+      const fullyStopped = await this.waitForAppRunningState(appPath, false, 6000);
+      if (!fullyStopped) {
+        throw new Error(`Could not stop running app before proxy relaunch: ${appPath}`);
+      }
       await this.launchAppWithProxy(appPath);
+      const restarted = await this.waitForAppRunningState(appPath, true, 6000);
+      if (!restarted) {
+        throw new Error(`App did not start after proxy launch: ${appPath}`);
+      }
       return;
     }
 
     if (!running) {
       await this.launchAppWithProxy(appPath);
+      const started = await this.waitForAppRunningState(appPath, true, 6000);
+      if (!started) {
+        throw new Error(`App did not start after proxy launch: ${appPath}`);
+      }
     }
   }
 
@@ -566,13 +875,24 @@ export class AppRoutingService {
     const running = this.isAppRunning(appPath);
     if (running && restartIfRunning) {
       await this.stopApp(appPath);
-      await new Promise(resolve => setTimeout(resolve, 800));
+      const fullyStopped = await this.waitForAppRunningState(appPath, false, 6000);
+      if (!fullyStopped) {
+        throw new Error(`Could not stop running app before direct relaunch: ${appPath}`);
+      }
       await this.launchAppDirect(appPath);
+      const restarted = await this.waitForAppRunningState(appPath, true, 6000);
+      if (!restarted) {
+        throw new Error(`App did not start after direct launch: ${appPath}`);
+      }
       return;
     }
 
     if (!running) {
       await this.launchAppDirect(appPath);
+      const started = await this.waitForAppRunningState(appPath, true, 6000);
+      if (!started) {
+        throw new Error(`App did not start after direct launch: ${appPath}`);
+      }
     }
   }
 }

@@ -7,6 +7,16 @@ import { V2RayService } from '../services/v2ray';
 import { AppRoutingService } from '../services/appRouting';
 import debugLogger from '../services/debugLogger';
 
+// Handle EPIPE errors (when stdout/stderr pipe closes)
+// This prevents the application from crashing if the console output pipe is broken
+// This commonly happens when the app is launched from a terminal and the terminal is closed
+const ignoreEpipe = (err: any) => {
+  if (err.code === 'EPIPE') return;
+  throw err;
+};
+if (process.stdout && process.stdout.on) process.stdout.on('error', ignoreEpipe);
+if (process.stderr && process.stderr.on) process.stderr.on('error', ignoreEpipe);
+
 // Make the custom `app://` scheme behave like a standard, secure scheme so
 // relative asset requests and Fetch/XHR/CSP work correctly in production.
 protocol.registerSchemesAsPrivileged([
@@ -299,6 +309,15 @@ const createMenu = () => {
 
 const setupIPCHandlers = () => {
   console.log('[Main] Setting up IPC handlers...');
+  const isVpnConnected = async (): Promise<boolean> => {
+    if (!v2rayService) return false;
+    try {
+      const status = await v2rayService.getStatus();
+      return Boolean(status?.connected);
+    } catch {
+      return false;
+    }
+  };
 
   ipcMain.handle('v2ray:connect', async (_: any, serverId: string) => {
     try {
@@ -322,7 +341,6 @@ const setupIPCHandlers = () => {
 
   ipcMain.handle('v2ray:getStatus', async () => {
     try {
-      console.log('[Main] v2ray:getStatus called');
       if (!v2rayService) {
         return { success: true, data: { connected: false } };
       }
@@ -398,6 +416,9 @@ const setupIPCHandlers = () => {
     try {
       if (!appRoutingService) throw new Error('AppRouting service not initialized');
       await appRoutingService.setAppBypass(appPath, shouldBypass);
+      if (await isVpnConnected()) {
+        await v2rayService.applyAppPolicyNow(appPath, shouldBypass ? 'bypass' : 'none');
+      }
       return { success: true };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -424,10 +445,23 @@ const setupIPCHandlers = () => {
     }
   });
 
+  ipcMain.handle('routing:launchDirect', async (_: any, appPath: string) => {
+    try {
+      if (!appRoutingService) throw new Error('AppRouting service not initialized');
+      await appRoutingService.launchAppDirect(appPath);
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
   ipcMain.handle('routing:setAppPolicy', async (_: any, appPath: string, policy: 'none' | 'bypass' | 'vpn') => {
     try {
       if (!appRoutingService) throw new Error('AppRouting service not initialized');
       await appRoutingService.setAppPolicy(appPath, policy);
+      if (await isVpnConnected()) {
+        await v2rayService.applyAppPolicyNow(appPath, policy);
+      }
       return { success: true };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -439,6 +473,46 @@ const setupIPCHandlers = () => {
       if (!appRoutingService) throw new Error('AppRouting service not initialized');
       const apps = await appRoutingService.getAppRoutingRules();
       return { success: true, data: apps };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('routing:getDiagnostics', async () => {
+    try {
+      if (!v2rayService) throw new Error('V2Ray service not initialized');
+      return { success: true, data: v2rayService.getRoutingDiagnostics() };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Advanced Routing Handlers
+  ipcMain.handle('routing:getRules', async () => {
+    try {
+      if (!v2rayService) throw new Error('V2Ray service not initialized');
+      const rules = v2rayService.getRoutingManager().getRules();
+      return { success: true, data: rules };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('routing:addRule', async (_: any, rule: any) => {
+    try {
+      if (!v2rayService) throw new Error('V2Ray service not initialized');
+      const id = await v2rayService.getRoutingManager().addRule(rule);
+      return { success: true, data: { id } };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('routing:removeRule', async (_: any, ruleId: number) => {
+    try {
+      if (!v2rayService) throw new Error('V2Ray service not initialized');
+      await v2rayService.getRoutingManager().removeRule(ruleId);
+      return { success: true };
     } catch (error: any) {
       return { success: false, error: error.message };
     }
@@ -493,6 +567,8 @@ const setupIPCHandlers = () => {
       return { success: false, error: error.message };
     }
   });
+
+
 
   ipcMain.handle('debug:exportLogs', async () => {
     try {

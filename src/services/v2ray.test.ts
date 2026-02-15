@@ -15,7 +15,11 @@ jest.mock('./appRouting', () => ({
 jest.mock('./systemProxyManager', () => ({
   default: {
     enableSystemProxy: jest.fn(),
+    enableDynamicPac: jest.fn(),
+    enableAutoProxy: jest.fn(),
     disableSystemProxy: jest.fn(),
+    getPacSnapshot: jest.fn(() => null),
+    getSystemProxySnapshot: jest.fn(() => ({ services: [] })),
   },
 }));
 
@@ -37,9 +41,9 @@ describe('V2RayService - Routing Rules', () => {
   });
 
   describe('generateV2RayConfig routing rules', () => {
-    test('should include localhost bypass and Telegram proxy rules by default', () => {
+    test('should include localhost bypass and Telegram proxy rules by default', async () => {
       // Access the private method via type assertion for testing
-      const config = (service as any).generateV2RayConfig(
+      const config = await (service as any).generateV2RayConfig(
         {
           id: 'test-server',
           name: 'Test Server',
@@ -61,7 +65,8 @@ describe('V2RayService - Routing Rules', () => {
       expect(config.routing.rules[0]).toEqual({
         type: 'field',
         outboundTag: 'direct',
-        ip: ['127.0.0.0/8'],
+        ip: ['127.0.0.0/8', '::1/128'],
+        domain: ['domain:localhost'],
       });
       expect(config.routing.rules[1]).toEqual({
         type: 'field',
@@ -88,8 +93,8 @@ describe('V2RayService - Routing Rules', () => {
       });
     });
 
-    test('should include ad-blocking rule when blockAds is enabled', () => {
-      const config = (service as any).generateV2RayConfig(
+    test('should include ad-blocking rule when blockAds is enabled', async () => {
+      const config = await (service as any).generateV2RayConfig(
         {
           id: 'test-server',
           name: 'Test Server',
@@ -111,7 +116,8 @@ describe('V2RayService - Routing Rules', () => {
       expect(config.routing.rules[0]).toEqual({
         type: 'field',
         outboundTag: 'direct',
-        ip: ['127.0.0.0/8'],
+        ip: ['127.0.0.0/8', '::1/128'],
+        domain: ['domain:localhost'],
       });
       expect(config.routing.rules[1]).toEqual({
         type: 'field',
@@ -143,8 +149,8 @@ describe('V2RayService - Routing Rules', () => {
       });
     });
 
-    test('should NOT include private IP bypass rules', () => {
-      const config = (service as any).generateV2RayConfig(
+    test('should NOT include private IP bypass rules', async () => {
+      const config = await (service as any).generateV2RayConfig(
         {
           id: 'test-server',
           name: 'Test Server',
@@ -172,8 +178,8 @@ describe('V2RayService - Routing Rules', () => {
       }
     });
 
-    test('should have proxy outbound as first outbound (default)', () => {
-      const config = (service as any).generateV2RayConfig(
+    test('should have proxy outbound as first outbound (default)', async () => {
+      const config = await (service as any).generateV2RayConfig(
         {
           id: 'test-server',
           name: 'Test Server',
@@ -196,8 +202,8 @@ describe('V2RayService - Routing Rules', () => {
       expect(config.outbounds[0].tag).toBe('proxy');
     });
 
-    test('should disable outbound mux by default for stability', () => {
-      const config = (service as any).generateV2RayConfig(
+    test('should disable outbound mux by default for stability', async () => {
+      const config = await (service as any).generateV2RayConfig(
         {
           id: 'test-server',
           name: 'Test Server',
@@ -218,8 +224,8 @@ describe('V2RayService - Routing Rules', () => {
       expect(config.outbounds[0].mux).toBeUndefined();
     });
 
-    test('should not force ws Host header when host query param is empty', () => {
-      const config = (service as any).generateV2RayConfig(
+    test('should not force ws Host header when host query param is empty', async () => {
+      const config = await (service as any).generateV2RayConfig(
         {
           id: 'test-server',
           name: 'Test Server',
@@ -245,8 +251,8 @@ describe('V2RayService - Routing Rules', () => {
       });
     });
 
-    test('should keep custom ws Host header when host query param is set', () => {
-      const config = (service as any).generateV2RayConfig(
+    test('should keep custom ws Host header when host query param is set', async () => {
+      const config = await (service as any).generateV2RayConfig(
         {
           id: 'test-server',
           name: 'Test Server',
@@ -275,8 +281,8 @@ describe('V2RayService - Routing Rules', () => {
       });
     });
 
-    test('should allow enabling outbound mux explicitly', () => {
-      const config = (service as any).generateV2RayConfig(
+    test('should allow enabling outbound mux explicitly', async () => {
+      const config = await (service as any).generateV2RayConfig(
         {
           id: 'test-server',
           name: 'Test Server',
@@ -300,8 +306,8 @@ describe('V2RayService - Routing Rules', () => {
       });
     });
 
-    test('should set domainStrategy to IPIfNonMatch', () => {
-      const config = (service as any).generateV2RayConfig(
+    test('should set domainStrategy to IPIfNonMatch', async () => {
+      const config = await (service as any).generateV2RayConfig(
         {
           id: 'test-server',
           name: 'Test Server',
@@ -321,8 +327,8 @@ describe('V2RayService - Routing Rules', () => {
       expect(config.routing.domainStrategy).toBe('IPIfNonMatch');
     });
 
-    test('should include DNS outbound with tag dns_out', () => {
-      const config = (service as any).generateV2RayConfig(
+    test('should include DNS outbound with tag dns_out', async () => {
+      const config = await (service as any).generateV2RayConfig(
         {
           id: 'test-server',
           name: 'Test Server',
@@ -344,8 +350,8 @@ describe('V2RayService - Routing Rules', () => {
       expect(dnsOutbound.protocol).toBe('dns');
     });
 
-    test('should configure DNS with tag dns_out for proxy routing', () => {
-      const config = (service as any).generateV2RayConfig(
+    test('should configure DNS with tag dns_out for proxy routing', async () => {
+      const config = await (service as any).generateV2RayConfig(
         {
           id: 'test-server',
           name: 'Test Server',
@@ -365,8 +371,8 @@ describe('V2RayService - Routing Rules', () => {
       expect(config.dns.tag).toBe('dns_out');
     });
 
-    test('should not generate invalid process-based routing fields from bypass apps', () => {
-      const config = (service as any).generateV2RayConfig(
+    test('should not generate invalid process-based routing fields from bypass apps', async () => {
+      const config = await (service as any).generateV2RayConfig(
         {
           id: 'test-server',
           name: 'Test Server',
@@ -394,6 +400,17 @@ describe('V2RayService - Routing Rules', () => {
       ensureAppUsesProxy: jest.fn().mockResolvedValue(undefined),
       findTelegramAppPath: jest.fn().mockResolvedValue('/Applications/Telegram.app'),
       bootstrapTelegramLocalSocksProxy: jest.fn().mockResolvedValue(undefined),
+      isAppRunning: jest.fn().mockReturnValue(true),
+      getAppRoutingCapability: jest.fn((appPath: string) => ({
+        appPath,
+        appName: 'Mock',
+        engine: appPath.toLowerCase().includes('safari') ? 'safari' : 'generic',
+        canForceProxy: true,
+        canForceDirect: true,
+        reason: appPath.toLowerCase().includes('safari')
+          ? 'Safari follows macOS proxy/PAC settings. Direct mode is best-effort.'
+          : 'mock-capable',
+      })),
     });
 
     test('bypass mode relaunches selected apps in direct mode by default', async () => {
@@ -402,10 +419,9 @@ describe('V2RayService - Routing Rules', () => {
 
       await (service as any).applyLauncherSplitTunnel(
         'global',
-        'bypass',
         [
-          { appPath: '/Applications/Firefox.app', appName: 'Firefox.app', shouldBypass: true },
-          { appPath: '/Applications/Brave Browser.app', appName: 'Brave Browser.app', shouldBypass: true },
+          { appPath: '/Applications/Firefox.app', appName: 'Firefox.app', policy: 'bypass' },
+          { appPath: '/Applications/Brave Browser.app', appName: 'Brave Browser.app', policy: 'bypass' },
         ],
         {}
       );
@@ -420,9 +436,8 @@ describe('V2RayService - Routing Rules', () => {
       (service as any).appRoutingService = appRoutingMock;
 
       await (service as any).applyLauncherSplitTunnel(
-        'global',
-        'rule',
-        [{ appPath: '/Applications/Firefox.app', appName: 'Firefox.app', shouldBypass: true }],
+        'per-app',
+        [{ appPath: '/Applications/Firefox.app', appName: 'Firefox.app', policy: 'vpn' }],
         {}
       );
 
@@ -433,7 +448,7 @@ describe('V2RayService - Routing Rules', () => {
       const appRoutingMock = makeAppRoutingMock();
       (service as any).appRoutingService = appRoutingMock;
 
-      await (service as any).applyLauncherSplitTunnel('global', 'full', [], {});
+      await (service as any).applyLauncherSplitTunnel('global', [], { restartTelegramOnConnect: true });
 
       expect(appRoutingMock.ensureAppUsesProxy).toHaveBeenCalledWith('/Applications/Telegram.app', true);
       expect(appRoutingMock.bootstrapTelegramLocalSocksProxy).toHaveBeenCalledWith('127.0.0.1', 10808);
@@ -445,8 +460,7 @@ describe('V2RayService - Routing Rules', () => {
 
       await (service as any).applyLauncherSplitTunnel(
         'global',
-        'bypass',
-        [{ appPath: '/Applications/Telegram.app', appName: 'Telegram.app', shouldBypass: true }],
+        [{ appPath: '/Applications/Telegram.app', appName: 'Telegram.app', policy: 'bypass' }],
         {}
       );
 
@@ -459,7 +473,7 @@ describe('V2RayService - Routing Rules', () => {
       const appRoutingMock = makeAppRoutingMock();
       (service as any).appRoutingService = appRoutingMock;
 
-      await (service as any).applyLauncherSplitTunnel('global', 'full', [], {});
+      await (service as any).applyLauncherSplitTunnel('global', [], { restartTelegramOnConnect: true });
 
       expect(appRoutingMock.ensureAppBypassesProxy).not.toHaveBeenCalled();
       // Telegram enforcement is expected in full mode unless explicitly disabled.
@@ -472,8 +486,7 @@ describe('V2RayService - Routing Rules', () => {
 
       await (service as any).applyLauncherSplitTunnel(
         'global',
-        'bypass',
-        [{ appPath: process.execPath, appName: 'self', shouldBypass: true }],
+        [{ appPath: process.execPath, appName: 'self', policy: 'bypass' }],
         {}
       );
 
@@ -481,33 +494,29 @@ describe('V2RayService - Routing Rules', () => {
     });
   });
 
-  describe('dns path logging', () => {
-    test('logs DNS resolution path when building config', () => {
-      const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
-
-      try {
-        (service as any).generateV2RayConfig(
-          {
-            id: 'test-server',
-            name: 'Test Server',
-            protocol: 'vless',
-            address: 'example.com',
-            port: 443,
-            config: {
-              id: 'test-uuid',
-              encryption: 'none',
-            },
+  describe('dns provider configuration', () => {
+    test('applies configured DNS provider servers when building config', async () => {
+      const config = await (service as any).generateV2RayConfig(
+        {
+          id: 'test-server',
+          name: 'Test Server',
+          protocol: 'vless',
+          address: 'example.com',
+          port: 443,
+          config: {
+            id: 'test-uuid',
+            encryption: 'none',
           },
-          'full',
-          [],
-          { dnsProvider: 'cloudflare', blockAds: false }
-        );
+        },
+        'full',
+        [],
+        { dnsProvider: 'cloudflare', blockAds: false }
+      );
 
-        const hasDnsPathLog = logSpy.mock.calls.some((call) => String(call[0]).includes('DNS resolution path'));
-        expect(hasDnsPathLog).toBe(true);
-      } finally {
-        logSpy.mockRestore();
-      }
+      expect(config.dns.servers).toEqual([
+        { address: '1.1.1.1', port: 53 },
+        { address: '1.0.0.1', port: 53 },
+      ]);
     });
   });
 });

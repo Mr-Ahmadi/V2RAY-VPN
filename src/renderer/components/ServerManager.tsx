@@ -522,20 +522,22 @@ export default function ServerManager() {
               : connectError}
           </Alert>
         )}
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3, gap: 1.5, flexWrap: 'wrap' }}>
           <Typography variant="h5" sx={{ fontWeight: 600 }}>
             Servers
           </Typography>
-          <Box sx={{ display: 'flex', gap: 1 }}>
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', width: { xs: '100%', sm: 'auto' } }}>
             <Button
               variant="outlined"
               startIcon={<LinkIcon />}
               onClick={() => setOpenUriDialog(true)}
               sx={{
-                borderColor: '#6366f1',
-                color: '#6366f1',
+                borderColor: 'var(--primary)',
+                color: 'var(--primary)',
+                flex: { xs: 1, sm: 'unset' },
+                minHeight: 42,
                 '&:hover': {
-                  backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                  backgroundColor: 'rgba(20, 184, 166, 0.12)',
                 },
               }}
             >
@@ -546,7 +548,9 @@ export default function ServerManager() {
               startIcon={<AddIcon />}
               onClick={() => handleOpenDialog()}
               sx={{
-                background: 'linear-gradient(90deg, #6366f1, #ec4899)',
+                background: 'linear-gradient(90deg, var(--primary), var(--accent))',
+                flex: { xs: 1, sm: 'unset' },
+                minHeight: 42,
               }}
             >
               Add Server
@@ -561,12 +565,12 @@ export default function ServerManager() {
               <Grid item xs={12} key={server.id}>
                 <Card
                   sx={{
-                    backgroundColor: '#1e293b',
+                    backgroundColor: 'var(--bg-card)',
                     border: isConnected
                       ? '2px solid rgba(16, 185, 129, 0.5)'
-                      : '1px solid rgba(99, 102, 241, 0.1)',
+                      : '1px solid var(--border-light)',
                     '&:hover': {
-                      borderColor: isConnected ? 'rgba(16, 185, 129, 0.7)' : 'rgba(99, 102, 241, 0.3)',
+                      borderColor: isConnected ? 'rgba(16, 185, 129, 0.7)' : 'rgba(56, 189, 248, 0.35)',
                     },
                   }}
                 >
@@ -578,7 +582,7 @@ export default function ServerManager() {
                             {server.name}
                           </Typography>
                           {isConnected && (
-                            <Chip label="Connected" size="small" sx={{ backgroundColor: 'rgba(16, 185, 129, 0.2)', color: '#10b981' }} />
+                            <Chip label="Connected" size="small" sx={{ backgroundColor: 'rgba(34, 197, 94, 0.18)', color: 'var(--success)' }} />
                           )}
                         </Box>
                         <Typography variant="body2" color="textSecondary">
@@ -588,33 +592,33 @@ export default function ServerManager() {
                           <Chip
                             label={server.protocol.toUpperCase()}
                             size="small"
-                            sx={{ backgroundColor: 'rgba(99, 102, 241, 0.2)', color: '#6366f1' }}
+                            sx={{ backgroundColor: 'rgba(20, 184, 166, 0.2)', color: 'var(--primary)' }}
                           />
                           {pingResults[server.id]?.latency != null && (
                             <Chip
                               label={`${pingResults[server.id].latency} ms`}
                               size="small"
-                              sx={{ backgroundColor: 'rgba(16, 185, 129, 0.2)', color: '#10b981' }}
+                              sx={{ backgroundColor: 'rgba(34, 197, 94, 0.2)', color: 'var(--success)' }}
                             />
                           )}
                           {pingResults[server.id]?.error && !pingResults[server.id]?.latency && (
-                            <Chip label="Unreachable" size="small" sx={{ backgroundColor: 'rgba(239, 68, 68, 0.2)', color: '#ef4444' }} />
+                            <Chip label="Unreachable" size="small" sx={{ backgroundColor: 'rgba(239, 68, 68, 0.2)', color: 'var(--error)' }} />
                           )}
                         </Box>
                         {server.remarks && (
-                          <Typography variant="caption" sx={{ display: 'block', mt: 1, color: '#94a3b8' }}>
+                          <Typography variant="caption" sx={{ display: 'block', mt: 1, color: 'var(--text-secondary)' }}>
                             {server.remarks}
                           </Typography>
                         )}
                       </Box>
-                      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center', justifyContent: { xs: 'flex-start', sm: 'flex-end' }, width: { xs: '100%', sm: 'auto' } }}>
                         <Button
                           size="small"
                           variant="outlined"
                           startIcon={pingingId === server.id ? <CircularProgress size={16} /> : <SpeedIcon />}
                           onClick={() => handlePing(server.id)}
                           disabled={pingingId === server.id}
-                          sx={{ borderColor: '#10b981', color: '#10b981' }}
+                          sx={{ borderColor: 'var(--success)', color: 'var(--success)', minWidth: { xs: 92, sm: 'auto' } }}
                         >
                           {pingingId === server.id ? '…' : 'Test'}
                         </Button>
@@ -626,6 +630,7 @@ export default function ServerManager() {
                             startIcon={disconnectingId === server.id ? <CircularProgress size={16} /> : <DisconnectIcon />}
                             onClick={handleDisconnect}
                             disabled={disconnectingId === server.id}
+                            sx={{ minWidth: { xs: 124, sm: 'auto' } }}
                           >
                             {disconnectingId === server.id ? '…' : 'Disconnect'}
                           </Button>
@@ -637,17 +642,17 @@ export default function ServerManager() {
                             onClick={() => handleConnect(server.id)}
                             disabled={connectingId === server.id}
                             sx={{
-                              background: 'linear-gradient(90deg, #6366f1, #8b5cf6)',
-                              minWidth: 100,
+                              background: 'linear-gradient(90deg, var(--primary), var(--accent))',
+                              minWidth: { xs: 124, sm: 100 },
                             }}
                           >
                             {connectingId === server.id ? '…' : 'Connect'}
                           </Button>
                         )}
-                        <IconButton size="small" onClick={() => handleOpenDialog(server)} sx={{ color: '#6366f1' }} aria-label="Edit">
+                        <IconButton size="small" onClick={() => handleOpenDialog(server)} sx={{ color: 'var(--primary)' }} aria-label="Edit">
                           <EditIcon />
                         </IconButton>
-                        <IconButton size="small" onClick={() => handleDeleteServer(server.id)} sx={{ color: '#ef4444' }} aria-label="Delete">
+                        <IconButton size="small" onClick={() => handleDeleteServer(server.id)} sx={{ color: 'var(--error)' }} aria-label="Delete">
                           <DeleteIcon />
                         </IconButton>
                       </Box>
@@ -660,7 +665,7 @@ export default function ServerManager() {
         </Grid>
 
         {servers.length === 0 && (
-          <Card sx={{ backgroundColor: '#1e293b', textAlign: 'center', py: 6 }}>
+          <Card sx={{ backgroundColor: 'var(--bg-card)', textAlign: 'center', py: 6 }}>
             <Box sx={{ mb: 2 }}>
               <Typography color="textSecondary" sx={{ mb: 2 }}>
                 No servers added yet. Get started by adding a server:
@@ -672,7 +677,7 @@ export default function ServerManager() {
                 startIcon={<LinkIcon />}
                 onClick={() => setOpenUriDialog(true)}
                 sx={{
-                  background: 'linear-gradient(90deg, #6366f1, #ec4899)',
+                  background: 'linear-gradient(90deg, var(--primary), var(--accent))',
                 }}
               >
                 Import from URI
@@ -682,8 +687,8 @@ export default function ServerManager() {
                 startIcon={<AddIcon />}
                 onClick={() => handleOpenDialog()}
                 sx={{
-                  borderColor: '#6366f1',
-                  color: '#6366f1',
+                  borderColor: 'var(--primary)',
+                  color: 'var(--primary)',
                 }}
               >
                 Add Manually
@@ -848,7 +853,7 @@ export default function ServerManager() {
             variant="contained"
             disabled={uriLoading}
             sx={{
-              background: 'linear-gradient(90deg, #6366f1, #ec4899)',
+              background: 'linear-gradient(90deg, var(--primary), var(--accent))',
             }}
           >
             {uriLoading ? 'Parsing...' : 'Import'}

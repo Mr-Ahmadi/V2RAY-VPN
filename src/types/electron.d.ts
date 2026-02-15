@@ -20,14 +20,25 @@ declare global {
         setAppPolicy: (appPath: string, policy: 'none' | 'bypass' | 'vpn') => Promise<any>;
         getAppPolicies: () => Promise<any>;
         launchWithProxy: (appPath: string) => Promise<any>;
+        launchDirect: (appPath: string) => Promise<any>;
+        getDiagnostics: () => Promise<any>;
+        getRules: () => Promise<any>;
+        addRule: (rule: any) => Promise<any>;
+        removeRule: (ruleId: number) => Promise<any>;
       };
       settings: {
         get: () => Promise<any>;
         save: (settings: any) => Promise<any>;
         togglePing: (enable: boolean) => Promise<any>;
       };
+      debug: {
+        getLogs: (filter?: any) => Promise<any>;
+        clearLogs: () => Promise<any>;
+        exportLogs: () => Promise<any>;
+        getLogFile: () => Promise<any>;
+      };
     };
   }
 }
 
-export {};
+export { };

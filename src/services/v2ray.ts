@@ -8,6 +8,25 @@ import { queryAsync, runAsync } from '../db/database.js';
 import { ServerManager, Server, ConnectionStatus } from './serverManager.js';
 import { AppRoutingService, AppRoutingRule } from './appRouting.js';
 import systemProxyManager from './systemProxyManager.js';
+import debugLogger from './debugLogger.js';
+import { V2RayConfigBuilder } from './config/V2RayConfigBuilder.js';
+import { RoutingManager } from './routing/RoutingManager.js';
+
+interface RoutingDecisionLogEntry {
+  timestamp: string;
+  appPath: string;
+  appName: string;
+  policy: 'bypass' | 'vpn';
+  proxyMode: string;
+  action: 'applied' | 'skipped';
+  reason: string;
+  success: boolean;
+}
+
+interface PacRoutingPlan {
+  directDomains: string[];
+  proxyDomains: string[];
+}
 
 export class V2RayService {
   private static readonly TELEGRAM_IP_RANGES = [
@@ -20,7 +39,11 @@ export class V2RayService {
   private v2rayProcess: ChildProcess | null = null;
   private serverManager: ServerManager | null = null;
   private appRoutingService: AppRoutingService | null = null;
-  private connectionStatus: ConnectionStatus = { connected: false };
+  private routingManager: RoutingManager | null = null;
+  private connectionStatus: ConnectionStatus = {
+    connected: false,
+    state: 'disconnected'
+  };
   private configPath: string;
   private v2rayCorePath: string;
   private apiPort: number = 10085;
@@ -32,6 +55,50 @@ export class V2RayService {
   private enablePingCalculation: boolean = false;
   private statsSocket: any = null;
   private telegramProxyBootstrappedInSession = false;
+  private routingDecisionLog: RoutingDecisionLogEntry[] = [];
+  private lastRoutingVerification: Record<string, any> | null = null;
+
+  private normalizeDomainList(values: unknown): string[] {
+    if (!Array.isArray(values)) return [];
+    return Array.from(
+      new Set(
+        values
+          .map((value) => String(value || '').trim().toLowerCase())
+          .filter(Boolean)
+      )
+    );
+  }
+
+  private buildPacRoutingPlan(
+    appRoutingRules: AppRoutingRule[],
+    settings: Record<string, any>
+  ): PacRoutingPlan {
+    const explicitDirect = this.normalizeDomainList(settings.pacDirectDomains);
+    const explicitProxy = this.normalizeDomainList(settings.pacProxyDomains);
+
+    // PAC can't reliably route by process path. Keep stable domain-level behavior.
+    // Telegram domains are pinned to proxy to reduce breakage on restrictive networks.
+    const defaultProxyDomains = [
+      'telegram.org',
+      't.me',
+      'telegra.ph',
+      'telegram.me',
+      'tdesktop.com',
+    ];
+    const defaultDirectDomains = ['localhost', 'local'];
+
+    const plan = {
+      directDomains: Array.from(new Set([...defaultDirectDomains, ...explicitDirect])),
+      proxyDomains: Array.from(new Set([...defaultProxyDomains, ...explicitProxy])),
+    };
+
+    debugLogger.info('V2RayService', 'PAC routing plan generated', {
+      directDomains: plan.directDomains,
+      proxyDomains: plan.proxyDomains,
+    });
+
+    return plan;
+  }
 
   constructor() {
     let userDataPath = process.cwd();
@@ -84,6 +151,14 @@ export class V2RayService {
     return this.appRoutingService;
   }
 
+  getRoutingManager(): RoutingManager {
+    if (!this.routingManager) {
+      this.routingManager = new RoutingManager();
+      this.routingManager.initialize();
+    }
+    return this.routingManager;
+  }
+
   async initialize() {
     // Ensure binary has proper permissions
     this.ensureV2RayExecutable();
@@ -102,7 +177,7 @@ export class V2RayService {
     console.log('[V2RayService] ========== CONNECTION START ==========');
     console.log('[V2RayService] Connecting to server:', serverId);
     console.log('[V2RayService] Timestamp:', new Date().toISOString());
-    
+
     try {
       // Ensure v2ray binary is executable (important after packaging)
       this.ensureV2RayExecutable();
@@ -164,9 +239,16 @@ export class V2RayService {
         console.warn('[V2RayService] Could not load app routing policies:', error);
       }
 
+      // Load advanced routing rules
+      try {
+        await this.getRoutingManager().loadRules();
+      } catch (e) {
+        console.warn('[V2RayService] Failed to load advanced routing rules:', e);
+      }
+
       // Generate V2Ray config with routing
       console.log('[V2RayService] Generating V2Ray config...');
-      const config = this.generateV2RayConfig(server, routingMode, appRoutingRules, settings);
+      const config = await this.generateV2RayConfig(server, routingMode, appRoutingRules, settings);
       fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
       console.log('[V2RayService] V2Ray config written to:', this.configPath);
       console.log('[V2RayService] Config inbounds:', config.inbounds.map((i: any) => ({
@@ -183,7 +265,7 @@ export class V2RayService {
       console.log('[V2RayService] Starting V2Ray process...');
       console.log('[V2RayService] V2Ray core path:', this.v2rayCorePath);
       console.log('[V2RayService] Config file:', this.configPath);
-      
+
       // Kill any existing processes that might be using the proxy ports
       try {
         const { execSync } = require('child_process');
@@ -194,7 +276,7 @@ export class V2RayService {
       } catch (e) {
         console.warn('[V2RayService] Could not clean up existing processes (this is ok)');
       }
-      
+
       this.v2rayProcess = spawn(this.v2rayCorePath, ['run', '-c', this.configPath], {
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: false,
@@ -208,12 +290,19 @@ export class V2RayService {
 
       this.v2rayProcess.on('error', (err) => {
         console.error('[V2RayService] V2Ray process error:', err);
-        this.connectionStatus = { connected: false };
+        this.connectionStatus = {
+          connected: false,
+          state: 'error',
+          error: String(err)
+        };
       });
 
       this.v2rayProcess.on('exit', (code) => {
         console.log('[V2RayService] V2Ray process exited with code', code);
-        this.connectionStatus = { connected: false };
+        this.connectionStatus = {
+          connected: false,
+          state: 'disconnected'
+        };
         this.stopStatsPolling();
         // Disable system proxy on exit
         systemProxyManager.disableSystemProxy().catch(err => {
@@ -240,20 +329,23 @@ export class V2RayService {
 
       // Decide proxy activation based on routing mode
       console.log('[V2RayService] Setting up proxy with mode:', proxyMode);
-      
+
       if (proxyMode === 'per-app') {
         console.log('[V2RayService] Per-app mode: not enabling global system proxy. Use "Launch with Proxy" to route specific apps.');
       } else if (proxyMode === 'pac') {
-        console.log('[V2RayService] PAC mode: creating and enabling PAC file...');
-        // Create a simple PAC file and enable auto proxy
-        const pacDir = path.join(app.getPath('userData'), 'pac');
-        const pacPath = path.join(pacDir, 'proxy.pac');
+        console.log('[V2RayService] PAC mode: generating and enabling dynamic PAC...');
         try {
-          if (!fs.existsSync(pacDir)) fs.mkdirSync(pacDir, { recursive: true });
-          const pacContent = `function FindProxyForURL(url, host) {\n  if (isPlainHostName(host) || dnsDomainIs(host, 'localhost') || shExpMatch(host, '*.local')) return 'DIRECT';\n  if (dnsDomainIs(host, 'telegram.org') || shExpMatch(host, '*.telegram.org') || dnsDomainIs(host, 't.me') || dnsDomainIs(host, 'telegra.ph') || dnsDomainIs(host, 'telegram.me') || dnsDomainIs(host, 'tdesktop.com')) return 'SOCKS5 127.0.0.1:10808; PROXY 127.0.0.1:${10809}';\n  return 'SOCKS5 127.0.0.1:10808; PROXY 127.0.0.1:${10809}';\n}`;
-          fs.writeFileSync(pacPath, pacContent, 'utf-8');
-          await systemProxyManager.enableAutoProxy(`file://${pacPath}`);
-          console.log('[V2RayService] PAC file enabled');
+          const pacPlan = this.buildPacRoutingPlan(appRoutingRules, settings);
+          const pacResult = await systemProxyManager.enableDynamicPac(app.getPath('userData'), {
+            socksHost: '127.0.0.1',
+            socksPort: 10808,
+            httpHost: '127.0.0.1',
+            httpPort: 10809,
+            directDomains: pacPlan.directDomains,
+            proxyDomains: pacPlan.proxyDomains,
+          });
+          debugLogger.info('V2RayService', 'PAC mode enabled', pacResult);
+          console.log('[V2RayService] PAC file enabled at:', pacResult.pacPath);
         } catch (e) {
           console.warn('[V2RayService] Could not write/enable PAC file:', e);
           console.log('[V2RayService] Falling back to direct system proxy');
@@ -265,8 +357,10 @@ export class V2RayService {
         console.log('[V2RayService] System proxy enabled successfully');
       }
 
+      // Reset status
       this.connectionStatus = {
         connected: true,
+        state: 'connected',
         currentServer: server,
         connectedAt: Date.now(),
         uploadSpeed: 0,
@@ -289,6 +383,7 @@ export class V2RayService {
 
       // Launcher-based split tunneling for apps that don't honor system proxy
       await this.applyLauncherSplitTunnel(proxyMode, appRoutingRules, settings);
+      await this.verifyRoutingAtSystemLevel(proxyMode, appRoutingRules);
 
       // Log connection
       await runAsync(
@@ -306,23 +401,74 @@ export class V2RayService {
     } catch (error) {
       console.error('[V2RayService] ========== CONNECTION FAILED ==========');
       console.error('[V2RayService] Connection error:', error);
-      console.error('[V2RayService] Error stack:', error instanceof Error ? error.stack : 'N/A');
-      
+
       // Clean up on failure
       if (this.v2rayProcess) {
         console.log('[V2RayService] Killing V2Ray process due to connection failure...');
-        this.v2rayProcess.kill('SIGTERM');
+        try {
+          this.v2rayProcess.kill('SIGTERM');
+        } catch (e) { /* ignore */ }
         this.v2rayProcess = null;
       }
-      
+
       try {
         console.log('[V2RayService] Disabling system proxy due to connection failure...');
         await systemProxyManager.disableSystemProxy().catch(() => { });
       } catch (e) {
         console.warn('[V2RayService] Error during proxy cleanup:', e);
       }
-      
+
+      this.connectionStatus = {
+        connected: false,
+        state: 'error',
+        error: error instanceof Error ? error.message : String(error)
+      };
+
       throw error;
+    }
+  }
+
+  async disconnect(updateStatus = true): Promise<{ success: boolean; error?: string }> {
+    try {
+      debugLogger.info('V2RayService', 'Disconnecting...');
+
+      if (updateStatus) {
+        this.connectionStatus.state = 'disconnecting';
+      }
+
+      this.stopStatsPolling();
+
+      if (this.v2rayProcess) {
+        try {
+          this.v2rayProcess.kill('SIGTERM');
+        } catch (e) { /* ignore */ }
+        this.v2rayProcess = null;
+      }
+
+      // Cleanup system proxy
+      await systemProxyManager.disableSystemProxy();
+
+      if (updateStatus) {
+        this.connectionStatus = {
+          connected: false,
+          state: 'disconnected'
+        };
+      }
+
+      debugLogger.info('V2RayService', 'Disconnected successfully');
+      return { success: true };
+    } catch (error: any) {
+      debugLogger.error('V2RayService', 'Disconnect error', { error: error.message });
+
+      if (updateStatus) {
+        this.connectionStatus = {
+          connected: false,
+          state: 'error',
+          error: error.message
+        };
+      }
+
+      return { success: false, error: error.message };
     }
   }
 
@@ -355,34 +501,108 @@ export class V2RayService {
         forceTelegramProxy: settings.forceTelegramProxy !== false,
       });
 
-      // In global/PAC mode default route is proxy, so bypass rules are explicit overrides.
-      if (defaultRouteIsProxy && manageableBypassApps.length > 0) {
-        console.log('[V2RayService] Applying app-level bypass overrides');
+      // Always apply bypass rules for apps that support direct launch.
+      // In global mode: these apps need explicit bypass (override the global proxy).
+      // In per-app mode: these apps are already direct, but we still log the decision.
+      if (manageableBypassApps.length > 0) {
+        console.log('[V2RayService] Processing app-level bypass rules:', manageableBypassApps.length);
         for (const app of manageableBypassApps) {
-          await this.applyRuleAction(appRouting, app.appPath, 'bypass', restartRunningManagedApps);
+          const capability = appRouting.getAppRoutingCapability(app.appPath);
+          if (!capability.canForceDirect) {
+            const reason = `Cannot bypass: ${capability.reason}`;
+            this.recordRoutingDecision(app.appPath, app.appName, 'bypass', proxyMode, 'skipped', reason, false);
+            debugLogger.warn('V2RayService', 'Bypass not enforceable for this app', {
+              appPath: app.appPath,
+              appName: app.appName,
+              engine: capability.engine,
+              proxyMode,
+              reason: capability.reason,
+            });
+            continue;
+          }
+
+          if (!defaultRouteIsProxy) {
+            // In per-app mode, default is already direct — bypass apps don't need special handling.
+            this.recordRoutingDecision(app.appPath, app.appName, 'bypass', proxyMode, 'applied',
+              'Already direct in per-app mode (no action needed)', true);
+            continue;
+          }
+
+          const success = await this.applyRuleAction(appRouting, app.appPath, 'bypass', restartRunningManagedApps);
+          this.recordRoutingDecision(
+            app.appPath,
+            app.appName,
+            'bypass',
+            proxyMode,
+            success ? 'applied' : 'skipped',
+            success ? 'Direct launch policy applied' : 'Failed while applying direct launch policy',
+            success
+          );
         }
       }
 
-      // In per-app/rule mode default route is direct, so VPN rules are explicit overrides.
-      if (!defaultRouteIsProxy && manageableVpnApps.length > 0) {
-        console.log('[V2RayService] Applying app-level VPN overrides');
+      // Always apply VPN/proxy rules for apps that support proxy launch.
+      // In per-app mode: these apps need explicit proxy override.
+      // In global mode: they already go through proxy, but we ensure enforcement for reliability.
+      if (manageableVpnApps.length > 0) {
+        console.log('[V2RayService] Processing app-level VPN rules:', manageableVpnApps.length);
         for (const app of manageableVpnApps) {
-          await this.applyRuleAction(appRouting, app.appPath, 'vpn', restartRunningManagedApps);
+          const capability = appRouting.getAppRoutingCapability(app.appPath);
+          if (!capability.canForceProxy) {
+            const reason = `Cannot force proxy: ${capability.reason}`;
+            this.recordRoutingDecision(app.appPath, app.appName, 'vpn', proxyMode, 'skipped', reason, false);
+            debugLogger.warn('V2RayService', 'VPN policy not enforceable for this app', {
+              appPath: app.appPath,
+              appName: app.appName,
+              engine: capability.engine,
+              proxyMode,
+              reason: capability.reason,
+            });
+            continue;
+          }
+
+          if (defaultRouteIsProxy) {
+            // In global mode, default is already proxy — VPN apps don't need special handling.
+            this.recordRoutingDecision(app.appPath, app.appName, 'vpn', proxyMode, 'applied',
+              'Already proxied in global mode (system proxy active)', true);
+            continue;
+          }
+
+          const success = await this.applyRuleAction(appRouting, app.appPath, 'vpn', restartRunningManagedApps);
+          this.recordRoutingDecision(
+            app.appPath,
+            app.appName,
+            'vpn',
+            proxyMode,
+            success ? 'applied' : 'skipped',
+            success ? 'Proxy launch policy applied' : 'Failed while applying proxy launch policy',
+            success
+          );
         }
       }
 
       // Telegram often ignores system proxy on macOS. Ensure it is launched with proxy env.
       const forceTelegramProxy = settings.forceTelegramProxy !== false;
-      const restartTelegramOnConnect = settings.restartTelegramOnConnect !== false;
+      const restartTelegramOnConnect = settings.restartTelegramOnConnect === true;
       const bootstrapTelegramProxy = settings.bootstrapTelegramProxy !== false;
       if (forceTelegramProxy) {
         const telegramPath = await appRouting.findTelegramAppPath();
-        const telegramBypassed = telegramPath
-          ? this.getPolicyForPath(telegramPath, selectedRules) === 'bypass'
-          : false;
-        if (telegramPath && !telegramBypassed) {
+        const telegramPolicy = telegramPath ? this.getPolicyForPath(telegramPath, selectedRules) : 'none';
+        const telegramBypassed = telegramPolicy === 'bypass';
+        const telegramRunning = telegramPath ? appRouting.isAppRunning(telegramPath) : false;
+        const shouldManageTelegram = Boolean(
+          telegramPath &&
+          !telegramBypassed &&
+          (telegramRunning || telegramPolicy === 'vpn')
+        );
+
+        if (shouldManageTelegram && telegramPath) {
           console.log('[V2RayService] Ensuring Telegram uses proxy:', telegramPath);
-          await appRouting.ensureAppUsesProxy(telegramPath, restartTelegramOnConnect);
+          if (!telegramRunning) {
+            await appRouting.ensureAppUsesProxy(telegramPath, false);
+          } else if (restartTelegramOnConnect) {
+            await appRouting.ensureAppUsesProxy(telegramPath, true);
+          }
           if (bootstrapTelegramProxy && !this.telegramProxyBootstrappedInSession) {
             console.log('[V2RayService] Bootstrapping Telegram local SOCKS proxy profile');
             await appRouting.bootstrapTelegramLocalSocksProxy('127.0.0.1', 10808);
@@ -442,91 +662,224 @@ export class V2RayService {
     appPath: string,
     policy: 'bypass' | 'vpn',
     restartRunningManagedApps: boolean
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
-      if (!appPath) return;
+      if (!appPath) return false;
       if (policy === 'bypass') {
         await appRouting.ensureAppBypassesProxy(appPath, restartRunningManagedApps);
-        return;
+        return true;
       }
       await appRouting.ensureAppUsesProxy(appPath, restartRunningManagedApps);
+      return true;
     } catch (error) {
       console.warn(
         `[V2RayService] Failed to apply app policy ${policy} for ${appPath}:`,
         error
       );
+      return false;
     }
   }
 
-  async disconnect(): Promise<void> {
-    console.log('[V2RayService] ========== DISCONNECTION START ==========');
+  async applyAppPolicyNow(appPath: string, policy: 'none' | 'bypass' | 'vpn'): Promise<void> {
+    if (!this.connectionStatus.connected) return;
+    if (!appPath || this.isProtectedAppPath(appPath)) return;
+
+    const settings = await this.getSettings();
+    const routingMode = this.normalizeRoutingMode(settings.routingMode);
+    const proxyMode = this.getEffectiveProxyMode(settings, routingMode);
+    const defaultRouteIsProxy = proxyMode !== 'per-app';
+    const restartRunningManagedApps = settings.restartManagedAppsOnConnect !== false;
+    const appRouting = this.getAppRoutingService();
+    const appName = path.basename(appPath);
+
+    debugLogger.info('V2RayService', 'Applying app policy now', {
+      appPath, appName, policy, proxyMode, defaultRouteIsProxy,
+    });
+
+    // Policy "none" — remove any overrides, app follows the global proxy mode.
+    if (policy === 'none') {
+      debugLogger.info('V2RayService', 'Policy set to none — app will follow global proxy mode', { appPath });
+      return;
+    }
+
+    if (policy === 'bypass') {
+      const capability = appRouting.getAppRoutingCapability(appPath);
+      if (!capability.canForceDirect) {
+        const reason = `Cannot enforce bypass: ${capability.reason}`;
+        this.recordRoutingDecision(appPath, appName, 'bypass', proxyMode, 'skipped', reason, false);
+        debugLogger.warn('V2RayService', reason, { appPath, proxyMode, engine: capability.engine });
+        return;
+      }
+      if (!defaultRouteIsProxy) {
+        // Per-app mode: default is already direct, so bypass is a no-op (already not proxied).
+        this.recordRoutingDecision(appPath, appName, 'bypass', proxyMode, 'applied',
+          'Already direct in per-app mode', true);
+        return;
+      }
+      const success = await this.applyRuleAction(appRouting, appPath, 'bypass', restartRunningManagedApps);
+      this.recordRoutingDecision(
+        appPath, appName, 'bypass', proxyMode,
+        success ? 'applied' : 'skipped',
+        success ? 'Immediate bypass policy applied' : 'Immediate bypass policy failed',
+        success
+      );
+      return;
+    }
+
+    if (policy === 'vpn') {
+      const capability = appRouting.getAppRoutingCapability(appPath);
+      if (!capability.canForceProxy) {
+        const reason = `Cannot enforce VPN: ${capability.reason}`;
+        this.recordRoutingDecision(appPath, appName, 'vpn', proxyMode, 'skipped', reason, false);
+        debugLogger.warn('V2RayService', reason, { appPath, proxyMode, engine: capability.engine });
+        return;
+      }
+      if (defaultRouteIsProxy) {
+        // Global mode: default is already proxy, so VPN override is a no-op (already proxied).
+        this.recordRoutingDecision(appPath, appName, 'vpn', proxyMode, 'applied',
+          'Already proxied in global mode', true);
+        return;
+      }
+      const success = await this.applyRuleAction(appRouting, appPath, 'vpn', restartRunningManagedApps);
+      this.recordRoutingDecision(
+        appPath, appName, 'vpn', proxyMode,
+        success ? 'applied' : 'skipped',
+        success ? 'Immediate VPN policy applied' : 'Immediate VPN policy failed',
+        success
+      );
+    }
+  }
+
+  private recordRoutingDecision(
+    appPath: string,
+    appName: string,
+    policy: 'bypass' | 'vpn',
+    proxyMode: string,
+    action: 'applied' | 'skipped',
+    reason: string,
+    success: boolean
+  ): void {
+    const entry: RoutingDecisionLogEntry = {
+      timestamp: new Date().toISOString(),
+      appPath,
+      appName,
+      policy,
+      proxyMode,
+      action,
+      reason,
+      success,
+    };
+    this.routingDecisionLog.push(entry);
+    if (this.routingDecisionLog.length > 200) {
+      this.routingDecisionLog.shift();
+    }
+    debugLogger.info('RoutingDecision', `${policy} ${action}`, entry);
+  }
+
+  private async verifyRoutingAtSystemLevel(proxyMode: string, appRoutingRules: AppRoutingRule[]): Promise<void> {
     try {
-      this.stopStatsPolling();
+      const proxySnapshot = systemProxyManager.getSystemProxySnapshot();
+      const bypassRules = appRoutingRules.filter(rule => rule.policy === 'bypass');
+      const vpnRules = appRoutingRules.filter(rule => rule.policy === 'vpn');
+      const capabilitySummary = appRoutingRules.map(rule => {
+        const capability = this.getAppRoutingService().getAppRoutingCapability(rule.appPath);
+        return {
+          appPath: rule.appPath,
+          appName: rule.appName,
+          policy: rule.policy,
+          engine: capability.engine,
+          canForceProxy: capability.canForceProxy,
+          canForceDirect: capability.canForceDirect,
+          reason: capability.reason,
+        };
+      });
 
-      if (this.v2rayProcess) {
-        console.log('[V2RayService] Terminating V2Ray process...');
-        const processId = this.v2rayProcess.pid;
-        this.v2rayProcess.kill('SIGTERM');
-        
-        // Give the process time to gracefully shut down
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        // Force kill if still alive
-        if (this.v2rayProcess && !this.v2rayProcess.killed) {
-          console.log('[V2RayService] Process still alive, force killing...');
-          this.v2rayProcess.kill('SIGKILL');
-          await new Promise(resolve => setTimeout(resolve, 500));
-        }
-        
-        this.v2rayProcess = null;
-        console.log('[V2RayService] V2Ray process terminated');
-        
-        // Kill any remaining processes on the ports (just to be sure)
-        try {
-          const { execSync } = require('child_process');
-          // Kill any lingering v2ray processes
-          await new Promise(resolve => {
-            execSync('pkill -f "v2ray.*run" 2>/dev/null || true', { timeout: 2000 });
-            resolve(true);
-          });
-          console.log('[V2RayService] Cleaned up any lingering V2Ray processes');
-        } catch (e) {
-          // Ignore cleanup errors
-        }
-      } else {
-        console.log('[V2RayService] No active V2Ray process to terminate');
+      let expectedProxyEnabled = false;
+      if (proxyMode === 'global' || proxyMode === 'pac') {
+        expectedProxyEnabled = true;
+      } else if (proxyMode === 'per-app') {
+        expectedProxyEnabled = vpnRules.length > 0;
       }
 
-      // Disable system proxy
-      console.log('[V2RayService] Disabling system proxy...');
-      try {
-        await systemProxyManager.disableSystemProxy();
-        console.log('[V2RayService] System proxy disabled successfully');
-      } catch (e) {
-        console.warn('[V2RayService] Error disabling system proxy:', e);
+      const serviceStates = Array.isArray(proxySnapshot?.services)
+        ? proxySnapshot.services.map((service: any) => ({
+          service: service.service,
+          webEnabled: Boolean(service.web?.enabled),
+          secureWebEnabled: Boolean(service.secureWeb?.enabled),
+          socksEnabled: Boolean(service.socks?.enabled),
+          autoProxyEnabled: Boolean(service.autoProxy?.enabled),
+        }))
+        : [];
+      const hasAnyEnabledProxy = serviceStates.some(
+        service => service.webEnabled || service.secureWebEnabled || service.socksEnabled || service.autoProxyEnabled
+      );
+      const unsupportedRules = capabilitySummary.filter(summary => {
+        if (summary.policy === 'bypass') return !summary.canForceDirect;
+        if (summary.policy === 'vpn') return !summary.canForceProxy;
+        return false;
+      });
+
+      const verification = {
+        verifiedAt: new Date().toISOString(),
+        proxyMode,
+        expectedProxyEnabled,
+        observedProxyEnabled: hasAnyEnabledProxy,
+        proxySnapshot,
+        serviceStates,
+        appRuleCount: appRoutingRules.length,
+        bypassRuleCount: bypassRules.length,
+        vpnRuleCount: vpnRules.length,
+        unsupportedRules,
+      };
+      this.lastRoutingVerification = verification;
+
+      debugLogger.info('RoutingVerification', 'System proxy snapshot captured', {
+        proxyMode,
+        appRuleCount: appRoutingRules.length,
+        proxySnapshot,
+      });
+
+      if (expectedProxyEnabled !== hasAnyEnabledProxy) {
+        debugLogger.warn('RoutingVerification', 'System proxy state does not match expected routing mode', {
+          proxyMode,
+          expectedProxyEnabled,
+          observedProxyEnabled: hasAnyEnabledProxy,
+          serviceStates,
+        });
       }
 
-      this.connectionStatus = { connected: false };
-      this.telegramProxyBootstrappedInSession = false;
-
-      // Cleanup config file
-      if (fs.existsSync(this.configPath)) {
-        try {
-          fs.unlinkSync(this.configPath);
-          console.log('[V2RayService] Config file cleaned up');
-        } catch (e) {
-          console.warn('[V2RayService] Error cleaning up config file:', e);
-        }
+      if (unsupportedRules.length > 0) {
+        debugLogger.warn('RoutingVerification', 'Some app rules cannot be enforced on this platform/engine', {
+          unsupportedRules,
+        });
       }
-
-      console.log('[V2RayService] ========== DISCONNECTION SUCCESS ==========');
     } catch (error) {
-      console.error('[V2RayService] ========== DISCONNECTION ERROR ==========');
-      console.error('[V2RayService] Disconnect error:', error);
-      this.connectionStatus = { connected: false };
-      throw error;
+      this.lastRoutingVerification = {
+        verifiedAt: new Date().toISOString(),
+        proxyMode,
+        appRuleCount: appRoutingRules.length,
+        error: error instanceof Error ? error.message : String(error),
+      };
+      debugLogger.warn('RoutingVerification', 'Failed to capture system proxy snapshot', {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
+
+  getRoutingDiagnostics(): Record<string, any> {
+    return {
+      connected: this.connectionStatus.connected,
+      currentServer: this.connectionStatus.currentServer?.name || null,
+      recordedAt: new Date().toISOString(),
+      decisions: [...this.routingDecisionLog].slice(-80).reverse(),
+      proxyMode: this.lastRoutingVerification?.proxyMode || null,
+      pac: systemProxyManager.getPacSnapshot?.() || null,
+      systemProxy: systemProxyManager.getSystemProxySnapshot(),
+      verification: this.lastRoutingVerification,
+    };
+  }
+
+
 
   getStatus(): ConnectionStatus {
     return this.connectionStatus;
@@ -606,274 +959,135 @@ export class V2RayService {
     return 'global';
   }
 
-  private generateV2RayConfig(
+  private async generateV2RayConfig(
     server: Server,
     routingMode: string = 'full',
     appRoutingRules: AppRoutingRule[] = [],
     settings: Record<string, any> = {}
-  ): any {
-    const routingRules: any[] = [];
+  ): Promise<any> {
+    const builder = new V2RayConfigBuilder();
 
-    // V2Ray routing rules are processed in order. CRITICAL: Rules are evaluated top-to-bottom, first match wins!
-    // 
-    // CRITICAL DNS HANDLING:
-    // - DNS must route through the proxy (tag: dns_out -> dns protocol outbound)
-    // - All DNS requests intercepted and routed through remote DNS servers (Cloudflare, Google, etc.)
-    // - This prevents DNS leaks where queries go to ISP DNS instead of through VPN
-    
-    // CRITICAL ROUTING APPROACH (Requirements 1.4, 1.5):
-    // - Only localhost (127.0.0.0/8) bypasses the VPN to prevent routing loops
-    // - Optional ad-blocking for security/performance
-    // - NO private IP ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) bypass by default
-    // - NO other default bypass rules unless explicitly configured
-    // - All unmatched traffic routes through the first outbound (proxy) by default
-    
-    console.log('[V2RayService] Generating routing rules...');
-
-    // 1. ALWAYS bypass localhost (127.0.0.0/8) - prevents routing loops
-    routingRules.push({
-      type: 'field',
-      outboundTag: 'direct',
-      ip: ['127.0.0.0/8'],
+    // 1. API Inbound (Stats/Control)
+    builder.addInbound({
+      listen: '127.0.0.1',
+      port: this.apiPort,
+      protocol: 'dokodemo-door',
+      settings: { address: '127.0.0.1' },
+      tag: 'api',
     });
-    console.log('[V2RayService] Added localhost bypass rule');
 
-    // 2. Force Telegram domains through proxy.
-    // Some networks aggressively block Telegram. Keeping these domains explicit avoids
-    // accidental direct routing and keeps behavior stable even with custom rules.
-    routingRules.push({
-      type: 'field',
-      outboundTag: 'proxy',
-      domain: [
-        'geosite:telegram',
-        'domain:telegram.org',
-        'domain:t.me',
-        'domain:telegra.ph',
-        'domain:telegram.me',
-        'domain:tdesktop.com',
-      ],
+    // 2. SOCKS Inbound
+    builder.addInbound({
+      port: 10808,
+      listen: '127.0.0.1',
+      protocol: 'socks',
+      settings: {
+        auth: 'noauth',
+        udp: true,
+        ip: '127.0.0.1',
+      },
+      tag: 'socks_in',
+      sniffing: {
+        enabled: true,
+        destOverride: ['http', 'tls', 'quic'],
+        metadataOnly: false,
+      },
     });
-    console.log('[V2RayService] Added Telegram proxy routing rule');
 
-    // Telegram can use hard-coded IPs and MTProto endpoints.
-    routingRules.push({
-      type: 'field',
-      outboundTag: 'proxy',
-      ip: V2RayService.TELEGRAM_IP_RANGES,
+    // 3. HTTP Inbound
+    builder.addInbound({
+      port: 10809,
+      listen: '127.0.0.1',
+      protocol: 'http',
+      settings: {
+        allowTransparent: false
+      },
+      tag: 'http_in',
+      sniffing: {
+        enabled: true,
+        destOverride: ['http', 'tls', 'quic'],
+        metadataOnly: false,
+      },
     });
-    console.log('[V2RayService] Added Telegram IP proxy routing rule');
 
-    // 3. App bypass selections are currently stored for UI/UX, but V2Ray core
-    // does not support process-path based rules in this config format. Generating
-    // unsupported fields can make V2Ray fail to start, so keep config valid.
-    if (appRoutingRules && appRoutingRules.length > 0) {
-      const selectedApps = appRoutingRules
-        .map((app) => path.basename(app.appPath || app.appName || ''))
-        .filter((name: string) => name);
-      console.warn(
-        '[V2RayService] App-level entries detected but process-based routing is not supported by current V2Ray config schema. Using launcher-based isolation for app policies:',
-        selectedApps
-      );
-    }
+    // 4. Outbounds
+    // 4.1 Proxy Outbound (Main VPN connection)
+    const proxyOutbound = this.generateOutbound(server, settings);
+    builder.addOutbound(proxyOutbound);
 
-    // 4. Block ads (optional, improves performance and security)
-    const blockAds = settings.blockAds !== false;
-    if (blockAds) {
-      routingRules.push({
-        type: 'field',
-        outboundTag: 'block',
-        domain: ['geosite:category-ads-all'],
-      });
-      console.log('[V2RayService] Added ad-blocking rule');
-    }
+    // 4.2 Direct Outbound
+    builder.addOutbound({
+      tag: 'direct',
+      protocol: 'freedom',
+      settings: {
+        domainStrategy: 'UseIPv4',
+      },
+    });
 
-    // 5. CRITICAL: Route ALL other traffic through proxy (default outbound)
-    // No additional bypass rules added unless explicitly configured
-    console.log(`[V2RayService] Final routing configuration: ${routingRules.length} rules, mode=${routingMode}`);
-    console.log('[V2RayService] Active routing rules:', JSON.stringify(routingRules, null, 2));
+    // 4.3 Block Outbound
+    builder.addOutbound({
+      tag: 'block',
+      protocol: 'blackhole',
+      settings: {
+        response: { type: 'http' },
+      },
+    });
 
-    // Configure DNS based on user settings
-    // CRITICAL: DNS configuration determines if DNS leaks occur
+    // 4.4 DNS Outbound
+    builder.addOutbound({
+      tag: 'dns_out',
+      protocol: 'dns',
+    });
+
+    // 5. DNS Configuration
     const dnsProvider = settings.dnsProvider || 'cloudflare';
     let dnsServers: any[] = [];
-    
     switch (dnsProvider) {
       case 'cloudflare':
-        dnsServers = [
-          { address: '1.1.1.1', port: 53 },
-          { address: '1.0.0.1', port: 53 },
-        ];
-        console.log('[V2RayService] Using Cloudflare DNS servers');
+        dnsServers = [{ address: '1.1.1.1', port: 53 }, { address: '1.0.0.1', port: 53 }];
         break;
       case 'google':
-        dnsServers = [
-          { address: '8.8.8.8', port: 53 },
-          { address: '8.8.4.4', port: 53 },
-        ];
-        console.log('[V2RayService] Using Google DNS servers');
-        break;
-      case 'quad9':
-        dnsServers = [
-          { address: '9.9.9.9', port: 53 },
-          { address: '149.112.112.112', port: 53 },
-        ];
-        console.log('[V2RayService] Using Quad9 DNS servers');
-        break;
-      case 'opendns':
-        dnsServers = [
-          { address: '208.67.222.222', port: 53 },
-          { address: '208.67.220.220', port: 53 },
-        ];
-        console.log('[V2RayService] Using OpenDNS servers');
+        dnsServers = [{ address: '8.8.8.8', port: 53 }, { address: '8.8.4.4', port: 53 }];
         break;
       case 'custom':
-        if (settings.primaryDns) {
-          dnsServers.push({ address: settings.primaryDns, port: 53 });
-        }
-        if (settings.secondaryDns) {
-          dnsServers.push({ address: settings.secondaryDns, port: 53 });
-        }
-        if (dnsServers.length === 0) {
-          dnsServers = [{ address: '1.1.1.1', port: 53 }];
-        }
-        console.log('[V2RayService] Using custom DNS servers:', dnsServers);
+        if (settings.primaryDns) dnsServers.push({ address: settings.primaryDns, port: 53 });
+        if (settings.secondaryDns) dnsServers.push({ address: settings.secondaryDns, port: 53 });
+        if (dnsServers.length === 0) dnsServers = [{ address: '1.1.1.1', port: 53 }];
         break;
       default:
-        dnsServers = [
-          { address: '1.1.1.1', port: 53 },
-          { address: '8.8.8.8', port: 53 },
-        ];
-        console.log('[V2RayService] Using default DNS servers');
+        dnsServers = [{ address: '1.1.1.1', port: 53 }, { address: '8.8.8.8', port: 53 }];
+    }
+    builder.setDns(dnsServers);
+
+    // 6. Routing Rules
+    // 6.1 Localhost Bypass (Critical)
+    builder.addLocalhostBypass();
+
+    // 6.2 Telegram Proxy (Reliability)
+    builder.addTelegramRules();
+
+    // 6.3 Block Ads (Optional)
+    if (settings.blockAds !== false) {
+      builder.addBlockAdsRule();
     }
 
-    console.log('[V2RayService] DNS servers configured:', dnsServers.length);
-    console.log('[V2RayService] DNS resolution path:', {
-      provider: dnsProvider,
-      queryStrategy: 'UseIPv4',
-      routingDomainStrategy: 'IPIfNonMatch',
-      serverTargets: dnsServers,
-    });
+    // 6.4 Advanced Routing Rules (from RoutingManager)
+    const advancedRules = this.getRoutingManager().getV2RayRoutingRules();
+    if (advancedRules.length > 0) {
+      console.log(`[V2RayService] Adding ${advancedRules.length} user-defined routing rules`);
+      builder.addRules(advancedRules);
+    }
 
-    const config: any = {
-      log: {
-        loglevel: 'warning',
-        access: '',
-        error: '',
-      },
-      // CRITICAL: DNS configuration to prevent DNS leaks
-      // All DNS queries are intercepted and routed through the proxy
-      dns: {
-        // Remote DNS servers - queries routed through V2Ray proxy
-        servers: dnsServers,
-        // Strategy to resolve domains through DNS servers
-        queryStrategy: 'UseIPv4',
-        disableCache: false,
-        disableFallback: false,
-        // Tag to route DNS queries through proxy
-        tag: 'dns_out',
-      },
-      routing: {
-        // CRITICAL FIX: Use IPIfNonMatch to resolve domains through proxy DNS
-        // This ensures domains are looked up through the remote DNS servers
-        domainStrategy: 'IPIfNonMatch',
-        rules: routingRules,
-      },
-      // CRITICAL: Inbounds where local applications connect to
-      inbounds: [
-        // SOCKS5 inbound (most reliable for all traffic types)
-        {
-          port: 10808,
-          listen: '127.0.0.1',
-          protocol: 'socks',
-          settings: {
-            auth: 'noauth',
-            udp: true,
-            ip: '127.0.0.1',
-          },
-          tag: 'socks_in',
-          sniffing: {
-            enabled: true,
-            destOverride: ['http', 'tls', 'quic'],
-            metadataOnly: false,
-          },
-        },
-        // HTTP inbound (for HTTP traffic)
-        {
-          port: 10809,
-          listen: '127.0.0.1',
-          protocol: 'http',
-          settings: {
-            allowTransparent: false,
-          },
-          tag: 'http_in',
-          sniffing: {
-            enabled: true,
-            destOverride: ['http', 'tls', 'quic'],
-            metadataOnly: false,
-          },
-        },
-        // CRITICAL: API inbound for stats and monitoring
-        {
-          listen: '127.0.0.1',
-          port: this.apiPort,
-          protocol: 'dokodemo-door',
-          settings: {
-            address: '127.0.0.1',
-          },
-          tag: 'api',
-        },
-      ],
-      // CRITICAL: Outbounds - where traffic actually goes
-      outbounds: [
-        // First outbound is the default for all unmatched traffic
-        // This is the VPN proxy - all traffic goes here unless explicitly routed elsewhere
-        this.generateOutbound(server, settings),
-        // Direct outbound - only used for explicitly bypassed traffic (localhost, bypassed apps)
-        {
-          tag: 'direct',
-          protocol: 'freedom',
-          settings: {
-            domainStrategy: 'UseIPv4',
-          },
-        },
-        // Block outbound - for ad-blocking
-        {
-          tag: 'block',
-          protocol: 'blackhole',
-          settings: {
-            response: {
-              type: 'http',
-            },
-          },
-        },
-        // DNS outbound - routes DNS queries through proxy
-        {
-          tag: 'dns_out',
-          protocol: 'dns',
-        },
-      ],
-      stats: {},
-      api: {
-        tag: 'api',
-        services: ['StatsService'],
-      },
-      policy: {
-        levels: {
-          '0': {
-            statsUserDownlink: true,
-            statsUserUplink: true,
-          },
-        },
-        system: {
-          statsInboundDownlink: true,
-          statsInboundUplink: true,
-          statsOutboundDownlink: true,
-          statsOutboundUplink: true,
-        },
-      },
-    };
+    // 6.5 Log app-based policy note
+    if (appRoutingRules && appRoutingRules.length > 0) {
+      console.log('[V2RayService] Note: App routing handled via launcher/environment, not V2Ray config rules.');
+    }
 
-    console.log('[V2RayService] V2Ray configuration generated successfully');
+    // 7. Domain Strategy
+    builder.setRoutingDomainStrategy('IPIfNonMatch');
+
+    const config = builder.build();
+    console.log('[V2RayService] V2Ray configuration generated successfully using V2RayConfigBuilder');
     return config;
   }
 
@@ -889,7 +1103,7 @@ export class V2RayService {
           network,
           security,
         };
-        
+
         if (security === 'tls') {
           streamSettings.tlsSettings = {
             serverName: server.config.sni || server.config.host || server.address,
@@ -905,18 +1119,18 @@ export class V2RayService {
             shortId: server.config.shortId || '',
           };
         }
-        
+
         if (network === 'ws') {
           streamSettings.wsSettings = wsHost
             ? {
-                path: wsPath,
-                headers: {
-                  Host: wsHost,
-                },
-              }
+              path: wsPath,
+              headers: {
+                Host: wsHost,
+              },
+            }
             : {
-                path: wsPath,
-              };
+              path: wsPath,
+            };
         } else if (network === 'grpc') {
           streamSettings.grpcSettings = {
             serviceName: server.config.serviceName || server.config.path || '',
@@ -929,7 +1143,7 @@ export class V2RayService {
             },
           };
         }
-        
+
         const outbound: any = {
           tag: 'proxy',
           protocol: 'vless',
@@ -952,7 +1166,7 @@ export class V2RayService {
         if (server.config.flow) {
           outbound.settings.vnext[0].users[0].flow = server.config.flow;
         }
-        
+
         // Mux is optional and disabled by default for stability (notably Telegram).
         // Mux can be enabled explicitly via settings.enableMux=true.
         if (muxEnabled && !server.config.flow && network !== 'ws') {
@@ -961,7 +1175,7 @@ export class V2RayService {
             concurrency: 8,
           };
         }
-        
+
         return outbound;
       }
 
@@ -974,7 +1188,7 @@ export class V2RayService {
           network,
           security,
         };
-        
+
         if (security === 'tls' || server.config.tls === 'tls') {
           streamSettings.security = 'tls';
           streamSettings.tlsSettings = {
@@ -983,18 +1197,18 @@ export class V2RayService {
             fingerprint: 'chrome',
           };
         }
-        
+
         if (network === 'ws') {
           streamSettings.wsSettings = wsHost
             ? {
-                path: wsPath,
-                headers: {
-                  Host: wsHost,
-                },
-              }
+              path: wsPath,
+              headers: {
+                Host: wsHost,
+              },
+            }
             : {
-                path: wsPath,
-              };
+              path: wsPath,
+            };
         } else if (network === 'grpc') {
           streamSettings.grpcSettings = {
             serviceName: server.config.serviceName || server.config.path || '',
@@ -1007,7 +1221,7 @@ export class V2RayService {
             },
           };
         }
-        
+
         const outbound: any = {
           tag: 'proxy',
           protocol: 'vmess',
@@ -1050,25 +1264,25 @@ export class V2RayService {
             fingerprint: 'chrome',
           },
         };
-        
+
         if (network === 'ws') {
           streamSettings.wsSettings = wsHost
             ? {
-                path: wsPath,
-                headers: {
-                  Host: wsHost,
-                },
-              }
+              path: wsPath,
+              headers: {
+                Host: wsHost,
+              },
+            }
             : {
-                path: wsPath,
-              };
+              path: wsPath,
+            };
         } else if (network === 'grpc') {
           streamSettings.grpcSettings = {
             serviceName: server.config.serviceName || server.config.path || '',
             multiMode: false,
           };
         }
-        
+
         const outbound: any = {
           tag: 'proxy',
           protocol: 'trojan',
@@ -1094,27 +1308,27 @@ export class V2RayService {
 
       case 'shadowsocks':
         {
-        const outbound: any = {
-          tag: 'proxy',
-          protocol: 'shadowsocks',
-          settings: {
-            servers: [
-              {
-                address: server.address,
-                port: server.port,
-                password: server.config.password,
-                method: server.config.method || 'aes-256-gcm',
-              },
-            ],
-          },
-        };
-        if (muxEnabled) {
-          outbound.mux = {
-            enabled: true,
-            concurrency: 8,
+          const outbound: any = {
+            tag: 'proxy',
+            protocol: 'shadowsocks',
+            settings: {
+              servers: [
+                {
+                  address: server.address,
+                  port: server.port,
+                  password: server.config.password,
+                  method: server.config.method || 'aes-256-gcm',
+                },
+              ],
+            },
           };
-        }
-        return outbound;
+          if (muxEnabled) {
+            outbound.mux = {
+              enabled: true,
+              concurrency: 8,
+            };
+          }
+          return outbound;
         }
 
       default:
@@ -1308,7 +1522,7 @@ export class V2RayService {
     return new Promise((resolve) => {
       try {
         const { execSync } = require('child_process');
-        
+
         // Try a more reliable approach: check socket stats from lsof
         let upBytes = Math.floor(this.lastUploadBytes);
         let downBytes = Math.floor(this.lastDownloadBytes);
@@ -1321,23 +1535,23 @@ export class V2RayService {
           );
 
           const lines = lsofOutput.split('\n').filter((line: string) => line.trim());
-          
+
           // Count established connections
           const connections = lines.filter((line: string) => line.includes('ESTABLISHED')).length;
-          
+
           if (connections > 0) {
             console.log(`[V2RayService] Detected ${connections} active connections`);
-            
+
             // Estimate traffic based on connections
             // For each active connection, assume average throughput
             // This is conservative but realistic
             const estimatedTrafficPerConnection = 500 * 1024; // 500KB average per connection
             const estimatedUplink = upBytes + (connections * estimatedTrafficPerConnection * 0.35); // 35% up
             const estimatedDownlink = downBytes + (connections * estimatedTrafficPerConnection * 0.65); // 65% down
-            
+
             upBytes = Math.floor(estimatedUplink);
             downBytes = Math.floor(estimatedDownlink);
-            
+
             console.log(`[V2RayService] Estimated stats: ${upBytes} up, ${downBytes} down`);
           } else {
             // No active connections - traffic is 0
@@ -1468,10 +1682,10 @@ export class V2RayService {
         // Check both SOCKS and HTTP proxy ports
         const socksReady = await this.checkProxyPort(10808);
         const httpReady = await this.checkProxyPort(10809);
-        
+
         if (socksReady && httpReady) {
           console.log(`[V2RayService] Proxy ports open after ${attempt * delayMs}ms`);
-          
+
           // Additional verification: try to make a simple connection through the SOCKS proxy
           console.log('[V2RayService] Testing SOCKS connection...');
           const socksWorks = await this.testSOCKSConnection();
@@ -1499,20 +1713,20 @@ export class V2RayService {
 
       try {
         const socket = new net.Socket();
-        
+
         socket.setTimeout(2000);
         socket.on('connect', () => {
           clearTimeout(timeout);
           // Send SOCKS5 greeting
           socket.write(Buffer.from([0x05, 0x01, 0x00])); // SOCKS5, 1 auth method, no auth
-          
+
           const dataHandler = () => {
             clearTimeout(timeout);
             socket.destroy();
             // If we got a response, SOCKS is working
             resolve(true);
           };
-          
+
           socket.once('data', dataHandler);
           socket.on('error', () => {
             clearTimeout(timeout);
@@ -1520,18 +1734,18 @@ export class V2RayService {
             resolve(false);
           });
         });
-        
+
         socket.on('error', () => {
           clearTimeout(timeout);
           resolve(false);
         });
-        
+
         socket.on('timeout', () => {
           clearTimeout(timeout);
           socket.destroy();
           resolve(false);
         });
-        
+
         socket.connect(10808, '127.0.0.1');
       } catch (error) {
         clearTimeout(timeout);
@@ -1543,32 +1757,32 @@ export class V2RayService {
   private checkProxyPort(port: number): Promise<boolean> {
     return new Promise((resolve) => {
       const socket = new net.Socket();
-      
+
       socket.setTimeout(1000);
-      
+
       socket.on('connect', () => {
         socket.destroy();
         console.log(`[V2RayService] ✓ Port ${port} is open and accepting connections`);
         resolve(true);
       });
-      
+
       socket.on('timeout', () => {
         socket.destroy();
         resolve(false);
       });
-      
+
       socket.on('error', (err) => {
         // Port not ready
         resolve(false);
       });
-      
+
       socket.connect(port, '127.0.0.1');
     });
   }
 
   async testServerRealDelay(serverId: string): Promise<{ success: boolean; latency?: number; error?: string }> {
     try {
-      const server = await this.getServer(serverId);
+      const server = await this.getServerManager().getServer(serverId);
       if (!server) throw new Error('Server not found');
 
       // To test "Real Delay" without interrupting current connection:
@@ -1578,7 +1792,7 @@ export class V2RayService {
       // 4. Kill the process
 
       const tempPort = Math.floor(Math.random() * 10000) + 20000;
-      const tempConfig = this.generateV2RayConfig(server, 'full');
+      const tempConfig = await this.generateV2RayConfig(server, 'full');
 
       // Override inbounds for testing
       tempConfig.inbounds = [

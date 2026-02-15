@@ -10,18 +10,53 @@ const theme = createTheme({
   palette: {
     mode: 'dark',
     primary: {
-      main: '#818cf8',
+      main: '#14b8a6',
     },
     secondary: {
-      main: '#f472b6',
+      main: '#38bdf8',
     },
     background: {
-      default: '#020617',
-      paper: '#0f172a',
+      default: '#0b1117',
+      paper: '#101923',
+    },
+    text: {
+      primary: '#e6edf3',
+      secondary: '#9aa7b2',
     },
   },
   typography: {
-    fontFamily: '"Outfit", "Inter", sans-serif',
+    fontFamily: '"Sora", "Segoe UI", sans-serif',
+    button: {
+      textTransform: 'none',
+      fontWeight: 600,
+    },
+  },
+  shape: {
+    borderRadius: 12,
+  },
+  components: {
+    MuiCard: {
+      styleOverrides: {
+        root: {
+          border: '1px solid rgba(56, 189, 248, 0.12)',
+        },
+      },
+    },
+    MuiTab: {
+      styleOverrides: {
+        root: {
+          textTransform: 'none',
+          fontWeight: 600,
+        },
+      },
+    },
+    MuiButton: {
+      styleOverrides: {
+        root: {
+          borderRadius: 10,
+        },
+      },
+    },
   },
 });
 
@@ -54,7 +89,7 @@ class ErrorBoundary extends React.Component<
           <Typography variant="h5" sx={{ mb: 2 }}>
             Something went wrong
           </Typography>
-          <Typography variant="body2" sx={{ color: '#94a3b8' }}>
+          <Typography variant="body2" sx={{ color: 'text.secondary' }}>
             {this.state.error?.message}
           </Typography>
           <Typography variant="caption" sx={{ display: 'block', mt: 2, color: '#64748b' }}>
