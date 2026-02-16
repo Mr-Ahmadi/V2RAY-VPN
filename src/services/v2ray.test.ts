@@ -492,6 +492,56 @@ describe('V2RayService - Routing Rules', () => {
 
       expect(appRoutingMock.ensureAppBypassesProxy).not.toHaveBeenCalled();
     });
+
+    test('applyAppPolicyNow none in global mode re-applies default VPN route for running app', async () => {
+      const appRoutingMock = makeAppRoutingMock();
+      appRoutingMock.isAppRunning = jest.fn().mockReturnValue(true);
+      (service as any).appRoutingService = appRoutingMock;
+      (service as any).connectionStatus = { connected: true, state: 'connected' };
+      (service as any).getSettings = jest.fn().mockResolvedValue({
+        proxyMode: 'global',
+        routingMode: 'full',
+        restartManagedAppsOnConnect: true,
+      });
+
+      await (service as any).applyAppPolicyNow('/Applications/Firefox.app', 'none');
+
+      expect(appRoutingMock.ensureAppUsesProxy).toHaveBeenCalledWith('/Applications/Firefox.app', true);
+      expect(appRoutingMock.ensureAppBypassesProxy).not.toHaveBeenCalled();
+    });
+
+    test('applyAppPolicyNow none in per-app mode re-applies default direct route for running app', async () => {
+      const appRoutingMock = makeAppRoutingMock();
+      appRoutingMock.isAppRunning = jest.fn().mockReturnValue(true);
+      (service as any).appRoutingService = appRoutingMock;
+      (service as any).connectionStatus = { connected: true, state: 'connected' };
+      (service as any).getSettings = jest.fn().mockResolvedValue({
+        proxyMode: 'per-app',
+        routingMode: 'rule',
+        restartManagedAppsOnConnect: true,
+      });
+
+      await (service as any).applyAppPolicyNow('/Applications/Firefox.app', 'none');
+
+      expect(appRoutingMock.ensureAppBypassesProxy).toHaveBeenCalledWith('/Applications/Firefox.app', true);
+      expect(appRoutingMock.ensureAppUsesProxy).not.toHaveBeenCalled();
+    });
+
+    test('applyAppPolicyNow ignores connect-time restart setting and relaunches running app', async () => {
+      const appRoutingMock = makeAppRoutingMock();
+      appRoutingMock.isAppRunning = jest.fn().mockReturnValue(true);
+      (service as any).appRoutingService = appRoutingMock;
+      (service as any).connectionStatus = { connected: true, state: 'connected' };
+      (service as any).getSettings = jest.fn().mockResolvedValue({
+        proxyMode: 'global',
+        routingMode: 'full',
+        restartManagedAppsOnConnect: false,
+      });
+
+      await (service as any).applyAppPolicyNow('/Applications/Firefox.app', 'bypass');
+
+      expect(appRoutingMock.ensureAppBypassesProxy).toHaveBeenCalledWith('/Applications/Firefox.app', true);
+    });
   });
 
   describe('dns provider configuration', () => {

@@ -75,7 +75,7 @@ export default function LogViewer({ open, onClose }: LogViewerProps) {
     return (
         <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
             <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Typography variant="h6">Application Logs</Typography>
+                <Typography variant="h6" component="span">Application Logs</Typography>
                 <Box>
                     <IconButton onClick={handleClear} size="small" color="warning">
                         <ClearIcon />

@@ -688,7 +688,9 @@ export class V2RayService {
     const routingMode = this.normalizeRoutingMode(settings.routingMode);
     const proxyMode = this.getEffectiveProxyMode(settings, routingMode);
     const defaultRouteIsProxy = proxyMode !== 'per-app';
-    const restartRunningManagedApps = settings.restartManagedAppsOnConnect !== false;
+    // Explicit user policy changes should take effect immediately, even when the
+    // connect-time restart setting is disabled.
+    const restartRunningManagedApps = true;
     const appRouting = this.getAppRoutingService();
     const appName = path.basename(appPath);
 
@@ -696,9 +698,44 @@ export class V2RayService {
       appPath, appName, policy, proxyMode, defaultRouteIsProxy,
     });
 
-    // Policy "none" — remove any overrides, app follows the global proxy mode.
+    // Policy "none" — remove explicit override and re-apply current global default
+    // for running apps so previously forced launch flags/env are reset.
     if (policy === 'none') {
-      debugLogger.info('V2RayService', 'Policy set to none — app will follow global proxy mode', { appPath });
+      if (!appRouting.isAppRunning(appPath)) {
+        debugLogger.info('V2RayService', 'Policy set to none while app is not running — no immediate relaunch needed', {
+          appPath,
+          proxyMode,
+        });
+        return;
+      }
+
+      const defaultPolicy: 'bypass' | 'vpn' = defaultRouteIsProxy ? 'vpn' : 'bypass';
+      const capability = appRouting.getAppRoutingCapability(appPath);
+      if (defaultPolicy === 'vpn' && !capability.canForceProxy) {
+        const reason = `Follow-global skipped: cannot enforce default VPN route (${capability.reason})`;
+        this.recordRoutingDecision(appPath, appName, 'vpn', proxyMode, 'skipped', reason, false);
+        debugLogger.warn('V2RayService', reason, { appPath, proxyMode, engine: capability.engine });
+        return;
+      }
+      if (defaultPolicy === 'bypass' && !capability.canForceDirect) {
+        const reason = `Follow-global skipped: cannot enforce default direct route (${capability.reason})`;
+        this.recordRoutingDecision(appPath, appName, 'bypass', proxyMode, 'skipped', reason, false);
+        debugLogger.warn('V2RayService', reason, { appPath, proxyMode, engine: capability.engine });
+        return;
+      }
+
+      const success = await this.applyRuleAction(appRouting, appPath, defaultPolicy, restartRunningManagedApps);
+      this.recordRoutingDecision(
+        appPath,
+        appName,
+        defaultPolicy,
+        proxyMode,
+        success ? 'applied' : 'skipped',
+        success
+          ? `Follow-global reapplied (${defaultRouteIsProxy ? 'default VPN route' : 'default direct route'})`
+          : `Follow-global failed while applying ${defaultRouteIsProxy ? 'default VPN route' : 'default direct route'}`,
+        success
+      );
       return;
     }
 

@@ -438,7 +438,10 @@ const setupIPCHandlers = () => {
   ipcMain.handle('routing:launchWithProxy', async (_: any, appPath: string) => {
     try {
       if (!appRoutingService) throw new Error('AppRouting service not initialized');
-      await appRoutingService.launchAppWithProxy(appPath);
+      // Deterministic behavior: if already running, relaunch so proxy override is applied.
+      await appRoutingService.ensureAppUsesProxy(appPath, true);
+      // Keep stored policy in sync with the explicit launch action.
+      await appRoutingService.setAppPolicy(appPath, 'vpn');
       return { success: true };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -448,7 +451,10 @@ const setupIPCHandlers = () => {
   ipcMain.handle('routing:launchDirect', async (_: any, appPath: string) => {
     try {
       if (!appRoutingService) throw new Error('AppRouting service not initialized');
-      await appRoutingService.launchAppDirect(appPath);
+      // Deterministic behavior: if already running, relaunch so direct override is applied.
+      await appRoutingService.ensureAppBypassesProxy(appPath, true);
+      // Keep stored policy in sync with the explicit launch action.
+      await appRoutingService.setAppPolicy(appPath, 'bypass');
       return { success: true };
     } catch (error: any) {
       return { success: false, error: error.message };
