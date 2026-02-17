@@ -1,6 +1,8 @@
 # V2Ray VPN Client
 
-A full-featured V2Ray VPN client for macOS with system-wide proxy support, similar to V2Box and V2RayNG.
+A full-featured V2Ray VPN client for macOS with system-wide proxy support.
+
+![V2Ray VPN Client Screenshot](Screenshot.png)
 
 ## ✨ Features
 
@@ -235,8 +237,6 @@ This ensures ALL traffic (except localhost) goes through the VPN tunnel.
 2. Added DNS outbound with `protocol: 'dns'`
 3. Simplified routing: only bypass localhost, everything else to proxy
 4. Enable SOCKS first (most universal), then HTTP/HTTPS
-
-See `FIXES_APPLIED.md` for detailed technical explanation.
 
 ---
 
