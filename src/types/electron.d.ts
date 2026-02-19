@@ -37,6 +37,20 @@ declare global {
         exportLogs: () => Promise<any>;
         getLogFile: () => Promise<any>;
       };
+      updates: {
+        getAppInfo: () => Promise<any>;
+        checkGithub: (opts?: { owner?: string; repo?: string }) => Promise<any>;
+        openGithubRelease: (url?: string) => Promise<any>;
+        downloadAndInstallGithub: (opts?: { owner?: string; repo?: string }) => Promise<any>;
+      };
+      window: {
+        minimize: () => Promise<{ success: boolean; error?: string }>;
+        toggleMaximize: () => Promise<{ success: boolean; data?: { isMaximized: boolean }; error?: string }>;
+        close: () => Promise<{ success: boolean; error?: string }>;
+        getState: () => Promise<{ success: boolean; data?: { isMaximized: boolean }; error?: string }>;
+        getPlatform: () => Promise<{ success: boolean; data?: string; error?: string }>;
+        onStateChanged: (callback: (state: { isMaximized: boolean }) => void) => () => void;
+      };
     };
   }
 }

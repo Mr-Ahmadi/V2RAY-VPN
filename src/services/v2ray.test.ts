@@ -13,6 +13,7 @@ jest.mock('./appRouting', () => ({
 }));
 
 jest.mock('./systemProxyManager', () => ({
+  __esModule: true,
   default: {
     enableSystemProxy: jest.fn(),
     enableDynamicPac: jest.fn(),
@@ -32,11 +33,13 @@ jest.mock('electron', () => ({
 }));
 
 import { V2RayService } from './v2ray';
+import systemProxyManager from './systemProxyManager';
 
 describe('V2RayService - Routing Rules', () => {
   let service: V2RayService;
 
   beforeEach(() => {
+    jest.clearAllMocks();
     service = new V2RayService();
   });
 
@@ -444,6 +447,33 @@ describe('V2RayService - Routing Rules', () => {
       expect(appRoutingMock.ensureAppUsesProxy).toHaveBeenCalledWith('/Applications/Firefox.app', true);
     });
 
+    test('per-app mode always restarts VPN-selected apps even if restartManagedAppsOnConnect is false', async () => {
+      const appRoutingMock = makeAppRoutingMock();
+      (service as any).appRoutingService = appRoutingMock;
+
+      await (service as any).applyLauncherSplitTunnel(
+        'per-app',
+        [{ appPath: '/Applications/Firefox.app', appName: 'Firefox.app', policy: 'vpn' }],
+        { restartManagedAppsOnConnect: false }
+      );
+
+      expect(appRoutingMock.ensureAppUsesProxy).toHaveBeenCalledWith('/Applications/Firefox.app', true);
+    });
+
+    test('skips Safari VPN policy in per-app mode because it cannot be process-forced', async () => {
+      const appRoutingMock = makeAppRoutingMock();
+      (service as any).appRoutingService = appRoutingMock;
+
+      await (service as any).applyLauncherSplitTunnel(
+        'per-app',
+        [{ appPath: '/Applications/Safari.app', appName: 'Safari.app', policy: 'vpn' }],
+        {}
+      );
+
+      expect(appRoutingMock.ensureAppUsesProxy).not.toHaveBeenCalledWith('/Applications/Safari.app', true);
+      expect(appRoutingMock.ensureAppUsesProxy).not.toHaveBeenCalledWith('/Applications/Safari.app', false);
+    });
+
     test('telegram is forced to proxy when not bypassed', async () => {
       const appRoutingMock = makeAppRoutingMock();
       (service as any).appRoutingService = appRoutingMock;
@@ -542,6 +572,103 @@ describe('V2RayService - Routing Rules', () => {
 
       expect(appRoutingMock.ensureAppBypassesProxy).toHaveBeenCalledWith('/Applications/Firefox.app', true);
     });
+
+    test('applyAppPolicyNow skips Safari VPN policy in per-app mode', async () => {
+      const appRoutingMock = makeAppRoutingMock();
+      appRoutingMock.isAppRunning = jest.fn().mockReturnValue(true);
+      (service as any).appRoutingService = appRoutingMock;
+      (service as any).connectionStatus = { connected: true, state: 'connected' };
+      (service as any).getSettings = jest.fn().mockResolvedValue({
+        proxyMode: 'per-app',
+        routingMode: 'rule',
+      });
+
+      await (service as any).applyAppPolicyNow('/Applications/Safari.app', 'vpn');
+
+      expect(appRoutingMock.ensureAppUsesProxy).not.toHaveBeenCalledWith('/Applications/Safari.app', true);
+      expect(appRoutingMock.ensureAppUsesProxy).not.toHaveBeenCalledWith('/Applications/Safari.app', false);
+    });
+  });
+
+  describe('unexpected disconnect handling', () => {
+    const proxyManager = systemProxyManager as jest.Mocked<typeof systemProxyManager>;
+
+    test('enforces kill switch lockdown and schedules reconnect when enabled', async () => {
+      const reconnectSpy = jest
+        .spyOn(service as any, 'scheduleReconnect')
+        .mockImplementation(() => { });
+      (service as any).getSettings = jest.fn().mockResolvedValue({
+        reconnectOnDisconnect: true,
+        killSwitch: true,
+      });
+
+      await (service as any).handleUnexpectedProcessExit(true, 'server-1');
+
+      expect(reconnectSpy).toHaveBeenCalledWith('server-1');
+      expect(proxyManager.enableSystemProxy).toHaveBeenCalled();
+      expect(proxyManager.disableSystemProxy).not.toHaveBeenCalled();
+      reconnectSpy.mockRestore();
+    });
+
+    test('enforces kill switch lockdown when reconnect is disabled', async () => {
+      (service as any).getSettings = jest.fn().mockResolvedValue({
+        reconnectOnDisconnect: false,
+        killSwitch: true,
+      });
+
+      await (service as any).handleUnexpectedProcessExit(true, 'server-1');
+
+      expect(proxyManager.enableSystemProxy).toHaveBeenCalled();
+      expect(proxyManager.disableSystemProxy).not.toHaveBeenCalled();
+    });
+
+    test('disables system proxy when kill switch is disabled', async () => {
+      (service as any).getSettings = jest.fn().mockResolvedValue({
+        reconnectOnDisconnect: false,
+        killSwitch: false,
+      });
+
+      await (service as any).handleUnexpectedProcessExit(true, 'server-1');
+
+      expect(proxyManager.disableSystemProxy).toHaveBeenCalled();
+      expect(proxyManager.enableSystemProxy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('routing verification', () => {
+    const proxyManager = systemProxyManager as jest.Mocked<typeof systemProxyManager>;
+
+    test('treats per-app mode as no expected global system proxy', async () => {
+      proxyManager.getSystemProxySnapshot.mockReturnValue({
+        services: [
+          {
+            service: 'Wi-Fi',
+            web: { enabled: false },
+            secureWeb: { enabled: false },
+            socks: { enabled: false },
+            autoProxy: { enabled: false },
+          },
+        ],
+      } as any);
+
+      (service as any).appRoutingService = {
+        getAppRoutingCapability: jest.fn(() => ({
+          appPath: '/Applications/Firefox.app',
+          appName: 'Firefox.app',
+          engine: 'firefox',
+          canForceProxy: true,
+          canForceDirect: true,
+          reason: 'mock',
+        })),
+      };
+
+      await (service as any).verifyRoutingAtSystemLevel('per-app', [
+        { appPath: '/Applications/Firefox.app', appName: 'Firefox.app', policy: 'vpn' },
+      ]);
+
+      expect((service as any).lastRoutingVerification.expectedProxyEnabled).toBe(false);
+      expect((service as any).lastRoutingVerification.observedProxyEnabled).toBe(false);
+    });
   });
 
   describe('dns provider configuration', () => {
@@ -567,6 +694,134 @@ describe('V2RayService - Routing Rules', () => {
         { address: '1.1.1.1', port: 53 },
         { address: '1.0.0.1', port: 53 },
       ]);
+    });
+
+    test('applies Quad9 DNS servers when selected in settings', async () => {
+      const config = await (service as any).generateV2RayConfig(
+        {
+          id: 'test-server',
+          name: 'Test Server',
+          protocol: 'vless',
+          address: 'example.com',
+          port: 443,
+          config: {
+            id: 'test-uuid',
+            encryption: 'none',
+          },
+        },
+        'full',
+        [],
+        { dnsProvider: 'quad9', blockAds: false }
+      );
+
+      expect(config.dns.servers).toEqual([
+        { address: '9.9.9.9', port: 53 },
+        { address: '149.112.112.112', port: 53 },
+      ]);
+    });
+
+    test('applies OpenDNS servers when selected in settings', async () => {
+      const config = await (service as any).generateV2RayConfig(
+        {
+          id: 'test-server',
+          name: 'Test Server',
+          protocol: 'vless',
+          address: 'example.com',
+          port: 443,
+          config: {
+            id: 'test-uuid',
+            encryption: 'none',
+          },
+        },
+        'full',
+        [],
+        { dnsProvider: 'opendns', blockAds: false }
+      );
+
+      expect(config.dns.servers).toEqual([
+        { address: '208.67.222.222', port: 53 },
+        { address: '208.67.220.220', port: 53 },
+      ]);
+    });
+
+    test('switches DNS query strategy based on ipv6Disable setting', async () => {
+      const ipv6DisabledConfig = await (service as any).generateV2RayConfig(
+        {
+          id: 'test-server',
+          name: 'Test Server',
+          protocol: 'vless',
+          address: 'example.com',
+          port: 443,
+          config: {
+            id: 'test-uuid',
+            encryption: 'none',
+          },
+        },
+        'full',
+        [],
+        { dnsProvider: 'cloudflare', blockAds: false, ipv6Disable: true }
+      );
+      const dualStackConfig = await (service as any).generateV2RayConfig(
+        {
+          id: 'test-server',
+          name: 'Test Server',
+          protocol: 'vless',
+          address: 'example.com',
+          port: 443,
+          config: {
+            id: 'test-uuid',
+            encryption: 'none',
+          },
+        },
+        'full',
+        [],
+        { dnsProvider: 'cloudflare', blockAds: false, ipv6Disable: false }
+      );
+
+      expect(ipv6DisabledConfig.dns.queryStrategy).toBe('UseIPv4');
+      expect(dualStackConfig.dns.queryStrategy).toBe('UseIP');
+    });
+  });
+
+  describe('settings option behavior', () => {
+    test('applies global allowInsecure setting to TLS outbounds', async () => {
+      const config = await (service as any).generateV2RayConfig(
+        {
+          id: 'test-server',
+          name: 'Test Server',
+          protocol: 'vless',
+          address: 'example.com',
+          port: 443,
+          config: {
+            id: 'test-uuid',
+            encryption: 'none',
+            security: 'tls',
+            allowInsecure: 'false',
+          },
+        },
+        'full',
+        [],
+        { blockAds: false, allowInsecure: true }
+      );
+
+      expect(config.outbounds[0].streamSettings.tlsSettings.allowInsecure).toBe(true);
+    });
+
+    test('normalizes connection timeout seconds to milliseconds', () => {
+      expect((service as any).getConnectionTimeoutMs({ connectionTimeout: 10 })).toBe(10000);
+      expect((service as any).getConnectionTimeoutMs({ connectionTimeout: 30 })).toBe(30000);
+      expect((service as any).getConnectionTimeoutMs({ connectionTimeout: 120 })).toBe(120000);
+      expect((service as any).getConnectionTimeoutMs({ connectionTimeout: 'invalid' })).toBe(30000);
+    });
+
+    test('uses settings-driven proxy request timeout for ping probes', async () => {
+      const spy = jest.spyOn(service as any, 'measureProxyLatencyOnPort').mockResolvedValue(-1);
+      (service as any).proxyRequestTimeoutMs = 9876;
+
+      await (service as any).measureProxyLatency();
+
+      expect(spy).toHaveBeenCalledWith(10809, 9876);
+      spy.mockRestore();
     });
   });
 });

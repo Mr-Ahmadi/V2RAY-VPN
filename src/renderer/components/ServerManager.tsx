@@ -638,7 +638,13 @@ export default function ServerManager() {
                           <Button
                             size="small"
                             variant="contained"
-                            startIcon={connectingId === server.id ? <CircularProgress size={20} /> : <ConnectIcon />}
+                            startIcon={connectingId === server.id ? (
+                              <CircularProgress
+                                size={20}
+                                thickness={5}
+                                sx={{ color: '#ffffff' }}
+                              />
+                            ) : <ConnectIcon />}
                             onClick={() => handleConnect(server.id)}
                             disabled={connectingId === server.id}
                             sx={{

@@ -1,7 +1,8 @@
-import { app, BrowserWindow, Menu, ipcMain, protocol } from 'electron';
+import { app, BrowserWindow, Menu, MenuItemConstructorOptions, ipcMain, protocol, shell } from 'electron';
 import * as path from 'path';
 import * as net from 'net';
 import * as fs from 'fs';
+import * as https from 'https';
 import { initializeDatabase, saveMemoryStorage } from '../db/database';
 import { V2RayService } from '../services/v2ray';
 import { AppRoutingService } from '../services/appRouting';
@@ -32,7 +33,154 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 const PING_TIMEOUT_MS = 5000;
+const DEFAULT_UPDATE_REPO_OWNER = 'Mr-Ahmadi';
+const DEFAULT_UPDATE_REPO_NAME = 'V2RAY-VPN';
 
+const parseVersion = (value: string): number[] => {
+  const cleaned = String(value || '').trim().replace(/^v/i, '');
+  return cleaned.split('.').map((segment) => Number(segment) || 0);
+};
+
+const compareVersions = (a: string, b: string): number => {
+  const av = parseVersion(a);
+  const bv = parseVersion(b);
+  const len = Math.max(av.length, bv.length);
+  for (let i = 0; i < len; i += 1) {
+    const ai = av[i] || 0;
+    const bi = bv[i] || 0;
+    if (ai > bi) return 1;
+    if (ai < bi) return -1;
+  }
+  return 0;
+};
+
+const fetchJson = async (url: string): Promise<any> =>
+  new Promise((resolve, reject) => {
+    const request = https.get(
+      url,
+      {
+        headers: {
+          'User-Agent': 'V2RAY-VPN-Desktop',
+          Accept: 'application/vnd.github+json',
+        },
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+        response.on('end', () => {
+          const body = Buffer.concat(chunks).toString('utf-8');
+          const statusCode = response.statusCode || 0;
+          if (statusCode < 200 || statusCode >= 300) {
+            reject(new Error(`Request failed (${statusCode}): ${body || 'No body'}`));
+            return;
+          }
+          try {
+            resolve(JSON.parse(body));
+          } catch (error) {
+            reject(new Error(`Invalid JSON response: ${error instanceof Error ? error.message : String(error)}`));
+          }
+        });
+      }
+    );
+
+    request.on('error', reject);
+    request.setTimeout(8000, () => {
+      request.destroy(new Error('Request timeout'));
+    });
+  });
+
+const pickReleaseAsset = (assets: any[], platform: NodeJS.Platform, arch: string): any | null => {
+  if (!Array.isArray(assets) || assets.length === 0) return null;
+  const matchersByPlatform: Record<string, string[]> = {
+    darwin: ['.dmg', '.zip', '.pkg'],
+    win32: ['.exe', '.msi', '.zip'],
+    linux: ['.appimage', '.deb', '.rpm', '.tar.gz', '.zip'],
+  };
+  const matchers = matchersByPlatform[platform] || ['.zip', '.tar.gz'];
+  const archHintsByArch: Record<string, string[]> = {
+    arm64: ['arm64', 'aarch64'],
+    x64: ['x64', 'amd64', 'x86_64'],
+  };
+  const archHints = archHintsByArch[arch] || [];
+  const lowerAssets = assets.map((asset) => ({
+    ...asset,
+    _nameLower: String(asset?.name || '').toLowerCase(),
+  }));
+  const archMatchedAssets = archHints.length > 0
+    ? lowerAssets.filter((asset) => archHints.some((hint) => asset._nameLower.includes(hint)))
+    : lowerAssets;
+  const candidates = archMatchedAssets.length > 0 ? archMatchedAssets : lowerAssets;
+  for (const matcher of matchers) {
+    const found = candidates.find((asset) => asset._nameLower.includes(matcher));
+    if (found) return found;
+  }
+  return candidates[0] || null;
+};
+
+const sanitizeFileName = (name: string): string =>
+  name.replace(/[^a-zA-Z0-9._-]/g, '_');
+
+const downloadFile = async (url: string, destinationPath: string, maxRedirects = 3): Promise<void> =>
+  new Promise((resolve, reject) => {
+    const request = https.get(
+      url,
+      {
+        headers: {
+          'User-Agent': 'V2RAY-VPN-Desktop',
+          Accept: 'application/octet-stream',
+        },
+      },
+      (response) => {
+        const statusCode = response.statusCode || 0;
+        const redirectLocation = response.headers.location;
+        if (
+          redirectLocation &&
+          statusCode >= 300 &&
+          statusCode < 400 &&
+          maxRedirects > 0
+        ) {
+          const redirectedUrl = new URL(redirectLocation, url).toString();
+          response.resume();
+          void downloadFile(redirectedUrl, destinationPath, maxRedirects - 1)
+            .then(resolve)
+            .catch(reject);
+          return;
+        }
+
+        if (statusCode < 200 || statusCode >= 300) {
+          response.resume();
+          reject(new Error(`Download failed (${statusCode})`));
+          return;
+        }
+
+        const fileStream = fs.createWriteStream(destinationPath);
+        fileStream.on('error', (error) => {
+          fileStream.close();
+          fs.promises.unlink(destinationPath).catch(() => undefined);
+          reject(error);
+        });
+        fileStream.on('finish', () => {
+          fileStream.close();
+          resolve();
+        });
+        response.on('error', (error) => {
+          fileStream.close();
+          fs.promises.unlink(destinationPath).catch(() => undefined);
+          reject(error);
+        });
+        response.pipe(fileStream);
+      }
+    );
+    request.on('error', reject);
+    request.setTimeout(15000, () => {
+      request.destroy(new Error('Download request timeout'));
+    });
+  });
+
+const fetchLatestRelease = async (owner: string, repo: string): Promise<any> => {
+  const apiUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/releases/latest`;
+  return fetchJson(apiUrl);
+};
 
 // Check if we're in development mode
 const isDev = process.env.NODE_ENV === 'development';
@@ -47,6 +195,46 @@ console.log('[Main] Electron version:', process.versions.electron);
 let mainWindow: BrowserWindow | null = null;
 let v2rayService: V2RayService;
 let appRoutingService: AppRoutingService;
+
+const triggerAutoConnectIfEnabled = async () => {
+  if (!v2rayService) return;
+
+  try {
+    const settings = await v2rayService.getSettings();
+    if (settings.autoConnect !== true) {
+      return;
+    }
+
+    const status = v2rayService.getStatus();
+    if (status.connected || status.state === 'connecting') {
+      return;
+    }
+
+    const servers = await v2rayService.listServers();
+    if (!Array.isArray(servers) || servers.length === 0) {
+      console.log('[Main] Auto-connect enabled but no servers are configured');
+      return;
+    }
+
+    const preferredServerId = typeof settings.lastConnectedServerId === 'string'
+      ? settings.lastConnectedServerId
+      : '';
+    const selectedServerId = servers.some((server) => server.id === preferredServerId)
+      ? preferredServerId
+      : servers[0].id;
+
+    if (!selectedServerId) {
+      console.log('[Main] Auto-connect enabled but no valid server id found');
+      return;
+    }
+
+    console.log('[Main] Auto-connect enabled; attempting connection to server:', selectedServerId);
+    await v2rayService.connect(selectedServerId);
+    console.log('[Main] Auto-connect succeeded');
+  } catch (error) {
+    console.warn('[Main] Auto-connect failed:', error);
+  }
+};
 
 // Register custom protocol handler for serving static assets
 const registerProtocolHandler = () => {
@@ -96,6 +284,7 @@ const createWindow = async () => {
     height: 800,
     minWidth: 800,
     minHeight: 600,
+    frame: false,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -187,6 +376,14 @@ const createWindow = async () => {
     mainWindow = null;
   });
 
+  mainWindow.on('maximize', () => {
+    mainWindow?.webContents.send('window:state-changed', { isMaximized: true });
+  });
+
+  mainWindow.on('unmaximize', () => {
+    mainWindow?.webContents.send('window:state-changed', { isMaximized: false });
+  });
+
   console.log('[Main] Window setup complete');
 };
 
@@ -230,6 +427,7 @@ app.on('ready', async () => {
   }
 
   createMenu();
+  void triggerAutoConnectIfEnabled();
 });
 
 app.on('window-all-closed', () => {
@@ -258,53 +456,110 @@ app.on('activate', () => {
 });
 
 const createMenu = () => {
-  const template: any = [
-    {
-      label: 'Edit',
+  const isMac = process.platform === 'darwin';
+
+  const template: MenuItemConstructorOptions[] = [];
+
+  if (isMac) {
+    template.push({
+      label: app.name,
       submenu: [
-        {
-          label: 'Undo',
-          accelerator: 'CmdOrCtrl+Z',
-          role: 'undo',
-        },
-        {
-          label: 'Redo',
-          accelerator: 'CmdOrCtrl+Shift+Z',
-          role: 'redo',
-        },
+        { role: 'about' },
         { type: 'separator' },
-        {
-          label: 'Cut',
-          accelerator: 'CmdOrCtrl+X',
-          role: 'cut',
-        },
-        {
-          label: 'Copy',
-          accelerator: 'CmdOrCtrl+C',
-          role: 'copy',
-        },
-        {
-          label: 'Paste',
-          accelerator: 'CmdOrCtrl+V',
-          role: 'paste',
-        },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' },
       ],
+    });
+  }
+
+  const fileSubmenu: MenuItemConstructorOptions[] = [
+    {
+      label: 'Disconnect VPN',
+      accelerator: 'CmdOrCtrl+Shift+D',
+      click: async () => {
+        try {
+          if (v2rayService) {
+            await v2rayService.disconnect();
+          }
+        } catch (error) {
+          console.error('[Main] Failed to disconnect from menu:', error);
+        }
+      },
+    },
+    { type: 'separator' },
+  ];
+  fileSubmenu.push(isMac ? { role: 'close' } : { role: 'quit' });
+
+  const editSubmenu: MenuItemConstructorOptions[] = [
+    { role: 'undo' },
+    { role: 'redo' },
+    { type: 'separator' },
+    { role: 'cut' },
+    { role: 'copy' },
+    { role: 'paste' },
+    { role: 'delete' },
+    { role: 'selectAll' },
+  ];
+
+  const viewSubmenu: MenuItemConstructorOptions[] = [
+    { role: 'reload' },
+    { role: 'forceReload' },
+    { role: 'toggleDevTools' },
+    { type: 'separator' },
+    { role: 'resetZoom' },
+    { role: 'zoomIn' },
+    { role: 'zoomOut' },
+    { type: 'separator' },
+    { role: 'togglefullscreen' },
+  ];
+
+  const windowSubmenu: MenuItemConstructorOptions[] = [
+    { role: 'minimize' },
+    { role: 'zoom' },
+  ];
+  if (isMac) {
+    windowSubmenu.push({ type: 'separator' }, { role: 'front' });
+  } else {
+    windowSubmenu.push({ role: 'close' });
+  }
+
+  const helpSubmenu: MenuItemConstructorOptions[] = [
+    {
+      label: 'Open Debug Log',
+      click: async () => {
+        try {
+          const openError = await shell.openPath(debugLogger.getLogFilePath());
+          if (openError) {
+            console.warn('[Main] Failed to open debug log file:', openError);
+          }
+        } catch (error) {
+          console.error('[Main] Error opening debug log file:', error);
+        }
+      },
     },
     {
-      label: 'File',
-      submenu: [
-        {
-          label: 'Exit',
-          accelerator: 'CmdOrCtrl+Q',
-          click: () => {
-            app.quit();
-          },
-        },
-      ],
+      label: 'V2Ray Core Releases',
+      click: async () => {
+        await shell.openExternal('https://github.com/v2fly/v2ray-core/releases');
+      },
     },
   ];
 
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  template.push(
+    { label: 'File', submenu: fileSubmenu },
+    { label: 'Edit', submenu: editSubmenu },
+    { label: 'View', submenu: viewSubmenu },
+    { label: 'Window', submenu: windowSubmenu },
+    { label: 'Help', submenu: helpSubmenu }
+  );
+
+  const menu = Menu.buildFromTemplate(template);
+  Menu.setApplicationMenu(menu);
 };
 
 const setupIPCHandlers = () => {
@@ -348,6 +603,135 @@ const setupIPCHandlers = () => {
       return { success: true, data: status };
     } catch (error: any) {
       return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('window:minimize', () => {
+    mainWindow?.minimize();
+    return { success: true };
+  });
+
+  ipcMain.handle('window:toggleMaximize', () => {
+    if (!mainWindow) return { success: false, error: 'Window not available' };
+    if (mainWindow.isMaximized()) {
+      mainWindow.unmaximize();
+    } else {
+      mainWindow.maximize();
+    }
+    return { success: true, data: { isMaximized: mainWindow.isMaximized() } };
+  });
+
+  ipcMain.handle('window:close', () => {
+    mainWindow?.close();
+    return { success: true };
+  });
+
+  ipcMain.handle('window:getState', () => {
+    if (!mainWindow) return { success: false, error: 'Window not available' };
+    return { success: true, data: { isMaximized: mainWindow.isMaximized() } };
+  });
+
+  ipcMain.handle('window:getPlatform', () => {
+    return { success: true, data: process.platform };
+  });
+
+  ipcMain.handle('updates:getAppInfo', () => {
+    return {
+      success: true,
+      data: {
+        version: app.getVersion(),
+        platform: process.platform,
+        arch: process.arch,
+        electron: process.versions.electron,
+      },
+    };
+  });
+
+  ipcMain.handle('updates:checkGithub', async (_: any, opts?: { owner?: string; repo?: string }) => {
+    try {
+      const owner = String(opts?.owner || DEFAULT_UPDATE_REPO_OWNER).trim();
+      const repo = String(opts?.repo || DEFAULT_UPDATE_REPO_NAME).trim();
+      if (!owner || !repo) {
+        throw new Error('GitHub owner/repository is required');
+      }
+
+      const release = await fetchLatestRelease(owner, repo);
+      const latestVersion = String(release?.tag_name || release?.name || '').replace(/^v/i, '');
+      const currentVersion = app.getVersion();
+      const hasUpdate = latestVersion
+        ? compareVersions(latestVersion, currentVersion) > 0
+        : false;
+      const asset = pickReleaseAsset(release?.assets || [], process.platform, process.arch);
+
+      return {
+        success: true,
+        data: {
+          owner,
+          repo,
+          currentVersion,
+          latestVersion: latestVersion || currentVersion,
+          hasUpdate,
+          releaseName: release?.name || release?.tag_name || '',
+          publishedAt: release?.published_at || null,
+          releaseUrl: release?.html_url || `https://github.com/${owner}/${repo}/releases/latest`,
+          downloadUrl: asset?.browser_download_url || null,
+          assetName: asset?.name || null,
+        },
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error?.message || 'Failed to check updates from GitHub',
+      };
+    }
+  });
+
+  ipcMain.handle('updates:openGithubRelease', async (_: any, url?: string) => {
+    try {
+      const targetUrl = String(url || '').trim() || `https://github.com/${DEFAULT_UPDATE_REPO_OWNER}/${DEFAULT_UPDATE_REPO_NAME}/releases/latest`;
+      await shell.openExternal(targetUrl);
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('updates:downloadAndInstallGithub', async (_: any, opts?: { owner?: string; repo?: string }) => {
+    try {
+      const owner = String(opts?.owner || DEFAULT_UPDATE_REPO_OWNER).trim();
+      const repo = String(opts?.repo || DEFAULT_UPDATE_REPO_NAME).trim();
+      if (!owner || !repo) {
+        throw new Error('GitHub owner/repository is required');
+      }
+
+      const release = await fetchLatestRelease(owner, repo);
+      const asset = pickReleaseAsset(release?.assets || [], process.platform, process.arch);
+      if (!asset?.browser_download_url || !asset?.name) {
+        throw new Error('No downloadable build asset found for this platform');
+      }
+
+      const downloadsDir = app.getPath('downloads');
+      const fileName = sanitizeFileName(String(asset.name));
+      const targetPath = path.join(downloadsDir, fileName);
+      await downloadFile(String(asset.browser_download_url), targetPath);
+
+      const openResult = await shell.openPath(targetPath);
+      if (openResult) {
+        throw new Error(openResult);
+      }
+
+      return {
+        success: true,
+        data: {
+          filePath: targetPath,
+          releaseUrl: release?.html_url || `https://github.com/${owner}/${repo}/releases/latest`,
+        },
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error?.message || 'Failed to download/update from GitHub',
+      };
     }
   });
 
@@ -440,8 +824,6 @@ const setupIPCHandlers = () => {
       if (!appRoutingService) throw new Error('AppRouting service not initialized');
       // Deterministic behavior: if already running, relaunch so proxy override is applied.
       await appRoutingService.ensureAppUsesProxy(appPath, true);
-      // Keep stored policy in sync with the explicit launch action.
-      await appRoutingService.setAppPolicy(appPath, 'vpn');
       return { success: true };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -453,8 +835,6 @@ const setupIPCHandlers = () => {
       if (!appRoutingService) throw new Error('AppRouting service not initialized');
       // Deterministic behavior: if already running, relaunch so direct override is applied.
       await appRoutingService.ensureAppBypassesProxy(appPath, true);
-      // Keep stored policy in sync with the explicit launch action.
-      await appRoutingService.setAppPolicy(appPath, 'bypass');
       return { success: true };
     } catch (error: any) {
       return { success: false, error: error.message };

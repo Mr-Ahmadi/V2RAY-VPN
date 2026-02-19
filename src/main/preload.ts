@@ -48,6 +48,31 @@ const electronAPI = {
     exportLogs: () => ipcRenderer.invoke('debug:exportLogs'),
     getLogFile: () => ipcRenderer.invoke('debug:getLogFile'),
   },
+
+  // App updates and build metadata
+  updates: {
+    getAppInfo: () => ipcRenderer.invoke('updates:getAppInfo'),
+    checkGithub: (opts?: { owner?: string; repo?: string }) => ipcRenderer.invoke('updates:checkGithub', opts),
+    openGithubRelease: (url?: string) => ipcRenderer.invoke('updates:openGithubRelease', url),
+    downloadAndInstallGithub: (opts?: { owner?: string; repo?: string }) =>
+      ipcRenderer.invoke('updates:downloadAndInstallGithub', opts),
+  },
+  
+  // Window controls for custom title bar
+  window: {
+    minimize: () => ipcRenderer.invoke('window:minimize'),
+    toggleMaximize: () => ipcRenderer.invoke('window:toggleMaximize'),
+    close: () => ipcRenderer.invoke('window:close'),
+    getState: () => ipcRenderer.invoke('window:getState'),
+    getPlatform: () => ipcRenderer.invoke('window:getPlatform'),
+    onStateChanged: (callback: (state: { isMaximized: boolean }) => void) => {
+      const listener = (_event: any, state: { isMaximized: boolean }) => {
+        callback(state);
+      };
+      ipcRenderer.on('window:state-changed', listener);
+      return () => ipcRenderer.removeListener('window:state-changed', listener);
+    },
+  },
 };
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);

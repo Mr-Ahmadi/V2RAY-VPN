@@ -6,7 +6,7 @@ import http from 'http';
 import net from 'net';
 import { queryAsync, runAsync } from '../db/database.js';
 import { ServerManager, Server, ConnectionStatus } from './serverManager.js';
-import { AppRoutingService, AppRoutingRule } from './appRouting.js';
+import { AppRoutingService, AppRoutingRule, AppRoutingCapability } from './appRouting.js';
 import systemProxyManager from './systemProxyManager.js';
 import debugLogger from './debugLogger.js';
 import { V2RayConfigBuilder } from './config/V2RayConfigBuilder.js';
@@ -29,6 +29,8 @@ interface PacRoutingPlan {
 }
 
 export class V2RayService {
+  private static readonly MAX_RECONNECT_ATTEMPTS = 3;
+  private static readonly RECONNECT_DELAY_MS = 2500;
   private static readonly TELEGRAM_IP_RANGES = [
     '91.108.4.0/22',
     '91.108.8.0/21',
@@ -53,10 +55,15 @@ export class V2RayService {
   private lastStatsTime: number = 0;
   private pingInterval: NodeJS.Timeout | null = null;
   private enablePingCalculation: boolean = false;
+  private proxyRequestTimeoutMs: number = 4000;
   private statsSocket: any = null;
   private telegramProxyBootstrappedInSession = false;
   private routingDecisionLog: RoutingDecisionLogEntry[] = [];
   private lastRoutingVerification: Record<string, any> | null = null;
+  private ignoreNextProcessExit = false;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private reconnectAttempts = 0;
+  private lastConnectedServerId: string | null = null;
 
   private normalizeDomainList(values: unknown): string[] {
     if (!Array.isArray(values)) return [];
@@ -67,6 +74,114 @@ export class V2RayService {
           .filter(Boolean)
       )
     );
+  }
+
+  private normalizeBooleanFlag(value: unknown): boolean {
+    return value === true || value === 'true' || value === 1 || value === '1';
+  }
+
+  private getConnectionTimeoutMs(settings: Record<string, any>): number {
+    const seconds = Number(settings?.connectionTimeout);
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      return 30000;
+    }
+    // Keep a sane range to avoid accidental lockups or overly aggressive timeouts.
+    const clampedSeconds = Math.min(300, Math.max(5, Math.round(seconds)));
+    return clampedSeconds * 1000;
+  }
+
+  private async enforceKillSwitchLockdown(reason: string): Promise<void> {
+    try {
+      await systemProxyManager.enableSystemProxy();
+      debugLogger.warn('KillSwitch', 'Kill switch lockdown enforced', { reason });
+      console.warn('[V2RayService] Kill switch lockdown enforced:', reason);
+    } catch (error) {
+      debugLogger.error('KillSwitch', 'Failed to enforce kill switch lockdown', {
+        reason,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      console.error('[V2RayService] Failed to enforce kill switch lockdown:', error);
+    }
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+
+  private scheduleReconnect(serverId: string): void {
+    if (!serverId) return;
+    if (this.reconnectAttempts >= V2RayService.MAX_RECONNECT_ATTEMPTS) {
+      console.warn('[V2RayService] Reconnect limit reached; giving up');
+      return;
+    }
+
+    this.clearReconnectTimer();
+    const nextAttempt = this.reconnectAttempts + 1;
+
+    this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = null;
+
+      if (this.connectionStatus.connected || this.connectionStatus.state === 'connecting') {
+        return;
+      }
+
+      this.reconnectAttempts = nextAttempt;
+      console.log(
+        `[V2RayService] Reconnect attempt ${nextAttempt}/${V2RayService.MAX_RECONNECT_ATTEMPTS} to server ${serverId}`
+      );
+
+      this.connectionStatus = {
+        connected: false,
+        state: 'connecting',
+      };
+
+      try {
+        await this.connect(serverId);
+      } catch (error) {
+        console.warn('[V2RayService] Reconnect attempt failed:', error);
+        if (this.reconnectAttempts < V2RayService.MAX_RECONNECT_ATTEMPTS) {
+          this.scheduleReconnect(serverId);
+        }
+      }
+    }, V2RayService.RECONNECT_DELAY_MS);
+  }
+
+  private async handleUnexpectedProcessExit(
+    wasConnected: boolean,
+    serverIdForReconnect: string | null
+  ): Promise<void> {
+    let reconnectEnabled = false;
+    let killSwitchEnabled = false;
+    try {
+      const currentSettings = await this.getSettings();
+      reconnectEnabled = currentSettings.reconnectOnDisconnect === true;
+      killSwitchEnabled = currentSettings.killSwitch === true;
+    } catch (settingsError) {
+      console.warn('[V2RayService] Could not load settings for exit handling:', settingsError);
+    }
+
+    if (wasConnected && reconnectEnabled && serverIdForReconnect) {
+      console.log('[V2RayService] Unexpected disconnect detected; reconnect is enabled');
+      this.scheduleReconnect(serverIdForReconnect);
+      if (killSwitchEnabled) {
+        await this.enforceKillSwitchLockdown('unexpected disconnect while reconnecting');
+        return;
+      }
+    }
+
+    if (wasConnected && killSwitchEnabled) {
+      await this.enforceKillSwitchLockdown('unexpected disconnect');
+      return;
+    }
+
+    try {
+      await Promise.resolve(systemProxyManager.disableSystemProxy());
+    } catch (err) {
+      console.error('[V2RayService] Error disabling proxy on exit:', err);
+    }
   }
 
   private buildPacRoutingPlan(
@@ -177,6 +292,8 @@ export class V2RayService {
     console.log('[V2RayService] ========== CONNECTION START ==========');
     console.log('[V2RayService] Connecting to server:', serverId);
     console.log('[V2RayService] Timestamp:', new Date().toISOString());
+    this.clearReconnectTimer();
+    this.ignoreNextProcessExit = false;
 
     try {
       // Ensure v2ray binary is executable (important after packaging)
@@ -215,6 +332,8 @@ export class V2RayService {
       const proxyMode = this.getEffectiveProxyMode(settings, routingMode);
       const dnsProvider = settings.dnsProvider || 'cloudflare';
       const blockAds = settings.blockAds !== false;
+      const connectionTimeoutMs = this.getConnectionTimeoutMs(settings);
+      this.proxyRequestTimeoutMs = Math.min(connectionTimeoutMs, 15000);
 
       console.log('[V2RayService] Connection settings:', {
         routingMode,
@@ -222,6 +341,9 @@ export class V2RayService {
         dnsProvider,
         blockAds,
         enableMux: settings.enableMux === true,
+        reconnectOnDisconnect: settings.reconnectOnDisconnect === true,
+        killSwitch: settings.killSwitch === true,
+        connectionTimeoutMs,
       });
 
       // Load app-level routing rules (explicit per-app policy).
@@ -297,17 +419,24 @@ export class V2RayService {
         };
       });
 
-      this.v2rayProcess.on('exit', (code) => {
+      this.v2rayProcess.on('exit', async (code) => {
         console.log('[V2RayService] V2Ray process exited with code', code);
+        const wasConnected = this.connectionStatus.connected === true;
+        const serverIdForReconnect = this.connectionStatus.currentServer?.id || this.lastConnectedServerId;
+        const skippedUnexpectedHandling = this.ignoreNextProcessExit === true;
+        this.ignoreNextProcessExit = false;
+        this.v2rayProcess = null;
+
         this.connectionStatus = {
           connected: false,
           state: 'disconnected'
         };
         this.stopStatsPolling();
-        // Disable system proxy on exit
-        systemProxyManager.disableSystemProxy().catch(err => {
-          console.error('[V2RayService] Error disabling proxy on exit:', err);
-        });
+
+        if (skippedUnexpectedHandling) {
+          return;
+        }
+        await this.handleUnexpectedProcessExit(wasConnected, serverIdForReconnect);
       });
 
       // Listen to process output for debugging
@@ -324,7 +453,7 @@ export class V2RayService {
 
       // Wait for V2Ray to fully start and be ready to accept connections
       console.log('[V2RayService] Waiting for V2Ray to start...');
-      await this.waitForV2RayReady();
+      await this.waitForV2RayReady(connectionTimeoutMs);
       console.log('[V2RayService] V2Ray is ready');
 
       // Decide proxy activation based on routing mode
@@ -390,6 +519,13 @@ export class V2RayService {
         `INSERT INTO connection_logs (serverId, connectedAt) VALUES (?, ?)`,
         [serverId, new Date().toISOString()]
       );
+      this.lastConnectedServerId = serverId;
+      this.reconnectAttempts = 0;
+      try {
+        await this.saveSettings({ lastConnectedServerId: serverId });
+      } catch (settingsError) {
+        console.warn('[V2RayService] Could not persist lastConnectedServerId:', settingsError);
+      }
 
       const connectionTime = Date.now() - startTime;
       console.log('[V2RayService] ========== CONNECTION SUCCESS ==========');
@@ -405,17 +541,30 @@ export class V2RayService {
       // Clean up on failure
       if (this.v2rayProcess) {
         console.log('[V2RayService] Killing V2Ray process due to connection failure...');
+        this.ignoreNextProcessExit = true;
         try {
           this.v2rayProcess.kill('SIGTERM');
         } catch (e) { /* ignore */ }
         this.v2rayProcess = null;
       }
 
+      let killSwitchEnabled = false;
       try {
-        console.log('[V2RayService] Disabling system proxy due to connection failure...');
-        await systemProxyManager.disableSystemProxy().catch(() => { });
-      } catch (e) {
-        console.warn('[V2RayService] Error during proxy cleanup:', e);
+        const currentSettings = await this.getSettings();
+        killSwitchEnabled = currentSettings.killSwitch === true;
+      } catch {
+        // Ignore settings lookup errors during failure handling.
+      }
+
+      if (killSwitchEnabled && this.reconnectAttempts > 0) {
+        await this.enforceKillSwitchLockdown('reconnect failure');
+      } else {
+        try {
+          console.log('[V2RayService] Disabling system proxy due to connection failure...');
+          await Promise.resolve(systemProxyManager.disableSystemProxy());
+        } catch (e) {
+          console.warn('[V2RayService] Error during proxy cleanup:', e);
+        }
       }
 
       this.connectionStatus = {
@@ -431,18 +580,26 @@ export class V2RayService {
   async disconnect(updateStatus = true): Promise<{ success: boolean; error?: string }> {
     try {
       debugLogger.info('V2RayService', 'Disconnecting...');
+      this.clearReconnectTimer();
+      this.reconnectAttempts = 0;
 
       if (updateStatus) {
         this.connectionStatus.state = 'disconnecting';
       }
 
       this.stopStatsPolling();
+      this.lastConnectedServerId = this.connectionStatus.currentServer?.id || this.lastConnectedServerId;
 
+      const hadProcess = Boolean(this.v2rayProcess);
       if (this.v2rayProcess) {
+        this.ignoreNextProcessExit = true;
         try {
           this.v2rayProcess.kill('SIGTERM');
         } catch (e) { /* ignore */ }
         this.v2rayProcess = null;
+      }
+      if (!hadProcess) {
+        this.ignoreNextProcessExit = false;
       }
 
       // Cleanup system proxy
@@ -456,6 +613,11 @@ export class V2RayService {
       }
 
       debugLogger.info('V2RayService', 'Disconnected successfully');
+      if (hadProcess) {
+        setTimeout(() => {
+          this.ignoreNextProcessExit = false;
+        }, 5000);
+      }
       return { success: true };
     } catch (error: any) {
       debugLogger.error('V2RayService', 'Disconnect error', { error: error.message });
@@ -483,6 +645,9 @@ export class V2RayService {
       // Default to restart managed apps so bypass/proxy intent is applied deterministically.
       // Can be disabled explicitly with restartManagedAppsOnConnect=false.
       const restartRunningManagedApps = settings.restartManagedAppsOnConnect !== false;
+      // Per-app proxy mode requires a relaunch for apps selected as VPN to make
+      // process-level proxy args/env take effect.
+      const restartVpnApps = proxyMode === 'per-app' ? true : restartRunningManagedApps;
       const bypassApps = selectedRules.filter(rule => rule.policy === 'bypass');
       const vpnApps = selectedRules.filter(rule => rule.policy === 'vpn');
       const manageableBypassApps = bypassApps.filter((rule) => !this.isProtectedAppPath(rule.appPath || ''));
@@ -498,6 +663,7 @@ export class V2RayService {
         manageableVpnApps: manageableVpnApps.length,
         skippedProtectedApps: skippedProtectedApps.map((app) => app?.appPath).filter(Boolean),
         restartRunningManagedApps,
+        restartVpnApps,
         forceTelegramProxy: settings.forceTelegramProxy !== false,
       });
 
@@ -508,15 +674,16 @@ export class V2RayService {
         console.log('[V2RayService] Processing app-level bypass rules:', manageableBypassApps.length);
         for (const app of manageableBypassApps) {
           const capability = appRouting.getAppRoutingCapability(app.appPath);
-          if (!capability.canForceDirect) {
-            const reason = `Cannot bypass: ${capability.reason}`;
+          const support = this.getPolicySupportForProxyMode(capability, 'bypass', proxyMode);
+          if (!support.supported) {
+            const reason = support.reason;
             this.recordRoutingDecision(app.appPath, app.appName, 'bypass', proxyMode, 'skipped', reason, false);
             debugLogger.warn('V2RayService', 'Bypass not enforceable for this app', {
               appPath: app.appPath,
               appName: app.appName,
               engine: capability.engine,
               proxyMode,
-              reason: capability.reason,
+              reason: support.reason,
             });
             continue;
           }
@@ -548,15 +715,16 @@ export class V2RayService {
         console.log('[V2RayService] Processing app-level VPN rules:', manageableVpnApps.length);
         for (const app of manageableVpnApps) {
           const capability = appRouting.getAppRoutingCapability(app.appPath);
-          if (!capability.canForceProxy) {
-            const reason = `Cannot force proxy: ${capability.reason}`;
+          const support = this.getPolicySupportForProxyMode(capability, 'vpn', proxyMode);
+          if (!support.supported) {
+            const reason = support.reason;
             this.recordRoutingDecision(app.appPath, app.appName, 'vpn', proxyMode, 'skipped', reason, false);
             debugLogger.warn('V2RayService', 'VPN policy not enforceable for this app', {
               appPath: app.appPath,
               appName: app.appName,
               engine: capability.engine,
               proxyMode,
-              reason: capability.reason,
+              reason: support.reason,
             });
             continue;
           }
@@ -568,7 +736,7 @@ export class V2RayService {
             continue;
           }
 
-          const success = await this.applyRuleAction(appRouting, app.appPath, 'vpn', restartRunningManagedApps);
+          const success = await this.applyRuleAction(appRouting, app.appPath, 'vpn', restartVpnApps);
           this.recordRoutingDecision(
             app.appPath,
             app.appName,
@@ -657,6 +825,42 @@ export class V2RayService {
     return match?.policy || 'none';
   }
 
+  private getPolicySupportForProxyMode(
+    capability: AppRoutingCapability,
+    policy: 'bypass' | 'vpn',
+    proxyMode: string
+  ): { supported: boolean; reason: string } {
+    if (policy === 'bypass') {
+      if (capability.engine === 'safari' && (proxyMode === 'global' || proxyMode === 'pac')) {
+        return {
+          supported: false,
+          reason: 'Safari bypass is unavailable in Global/PAC mode because Safari follows system proxy settings.',
+        };
+      }
+      if (!capability.canForceDirect) {
+        return {
+          supported: false,
+          reason: `Cannot bypass: ${capability.reason}`,
+        };
+      }
+      return { supported: true, reason: '' };
+    }
+
+    if (capability.engine === 'safari' && proxyMode === 'per-app') {
+      return {
+        supported: false,
+        reason: 'Safari VPN mode is unavailable in per-app mode because Safari does not support per-process proxy override.',
+      };
+    }
+    if (!capability.canForceProxy) {
+      return {
+        supported: false,
+        reason: `Cannot force proxy: ${capability.reason}`,
+      };
+    }
+    return { supported: true, reason: '' };
+  }
+
   private async applyRuleAction(
     appRouting: AppRoutingService,
     appPath: string,
@@ -711,15 +915,10 @@ export class V2RayService {
 
       const defaultPolicy: 'bypass' | 'vpn' = defaultRouteIsProxy ? 'vpn' : 'bypass';
       const capability = appRouting.getAppRoutingCapability(appPath);
-      if (defaultPolicy === 'vpn' && !capability.canForceProxy) {
-        const reason = `Follow-global skipped: cannot enforce default VPN route (${capability.reason})`;
-        this.recordRoutingDecision(appPath, appName, 'vpn', proxyMode, 'skipped', reason, false);
-        debugLogger.warn('V2RayService', reason, { appPath, proxyMode, engine: capability.engine });
-        return;
-      }
-      if (defaultPolicy === 'bypass' && !capability.canForceDirect) {
-        const reason = `Follow-global skipped: cannot enforce default direct route (${capability.reason})`;
-        this.recordRoutingDecision(appPath, appName, 'bypass', proxyMode, 'skipped', reason, false);
+      const support = this.getPolicySupportForProxyMode(capability, defaultPolicy, proxyMode);
+      if (!support.supported) {
+        const reason = `Follow-global skipped: ${support.reason}`;
+        this.recordRoutingDecision(appPath, appName, defaultPolicy, proxyMode, 'skipped', reason, false);
         debugLogger.warn('V2RayService', reason, { appPath, proxyMode, engine: capability.engine });
         return;
       }
@@ -741,8 +940,9 @@ export class V2RayService {
 
     if (policy === 'bypass') {
       const capability = appRouting.getAppRoutingCapability(appPath);
-      if (!capability.canForceDirect) {
-        const reason = `Cannot enforce bypass: ${capability.reason}`;
+      const support = this.getPolicySupportForProxyMode(capability, 'bypass', proxyMode);
+      if (!support.supported) {
+        const reason = support.reason;
         this.recordRoutingDecision(appPath, appName, 'bypass', proxyMode, 'skipped', reason, false);
         debugLogger.warn('V2RayService', reason, { appPath, proxyMode, engine: capability.engine });
         return;
@@ -765,8 +965,9 @@ export class V2RayService {
 
     if (policy === 'vpn') {
       const capability = appRouting.getAppRoutingCapability(appPath);
-      if (!capability.canForceProxy) {
-        const reason = `Cannot enforce VPN: ${capability.reason}`;
+      const support = this.getPolicySupportForProxyMode(capability, 'vpn', proxyMode);
+      if (!support.supported) {
+        const reason = support.reason;
         this.recordRoutingDecision(appPath, appName, 'vpn', proxyMode, 'skipped', reason, false);
         debugLogger.warn('V2RayService', reason, { appPath, proxyMode, engine: capability.engine });
         return;
@@ -834,8 +1035,6 @@ export class V2RayService {
       let expectedProxyEnabled = false;
       if (proxyMode === 'global' || proxyMode === 'pac') {
         expectedProxyEnabled = true;
-      } else if (proxyMode === 'per-app') {
-        expectedProxyEnabled = vpnRules.length > 0;
       }
 
       const serviceStates = Array.isArray(proxySnapshot?.services)
@@ -1086,6 +1285,12 @@ export class V2RayService {
       case 'google':
         dnsServers = [{ address: '8.8.8.8', port: 53 }, { address: '8.8.4.4', port: 53 }];
         break;
+      case 'quad9':
+        dnsServers = [{ address: '9.9.9.9', port: 53 }, { address: '149.112.112.112', port: 53 }];
+        break;
+      case 'opendns':
+        dnsServers = [{ address: '208.67.222.222', port: 53 }, { address: '208.67.220.220', port: 53 }];
+        break;
       case 'custom':
         if (settings.primaryDns) dnsServers.push({ address: settings.primaryDns, port: 53 });
         if (settings.secondaryDns) dnsServers.push({ address: settings.secondaryDns, port: 53 });
@@ -1094,7 +1299,8 @@ export class V2RayService {
       default:
         dnsServers = [{ address: '1.1.1.1', port: 53 }, { address: '8.8.8.8', port: 53 }];
     }
-    builder.setDns(dnsServers);
+    const dnsQueryStrategy = settings.ipv6Disable === true ? 'UseIPv4' : 'UseIP';
+    builder.setDns(dnsServers, dnsQueryStrategy);
 
     // 6. Routing Rules
     // 6.1 Localhost Bypass (Critical)
@@ -1130,6 +1336,7 @@ export class V2RayService {
 
   private generateOutbound(server: Server, settings: Record<string, any> = {}): any {
     const muxEnabled = settings.enableMux === true;
+    const globalAllowInsecure = this.normalizeBooleanFlag(settings.allowInsecure);
     switch (server.protocol) {
       case 'vless': {
         const network = server.config.type || 'tcp';
@@ -1144,7 +1351,9 @@ export class V2RayService {
         if (security === 'tls') {
           streamSettings.tlsSettings = {
             serverName: server.config.sni || server.config.host || server.address,
-            allowInsecure: server.config.allowInsecure === 'true' || server.config.insecure === 'true',
+            allowInsecure: globalAllowInsecure
+              || this.normalizeBooleanFlag(server.config.allowInsecure)
+              || this.normalizeBooleanFlag(server.config.insecure),
             fingerprint: 'chrome',
             alpn: ['h2', 'http/1.1'],
           };
@@ -1230,7 +1439,7 @@ export class V2RayService {
           streamSettings.security = 'tls';
           streamSettings.tlsSettings = {
             serverName: server.config.sni || server.config.host || server.address,
-            allowInsecure: server.config.allowInsecure === 'true',
+            allowInsecure: globalAllowInsecure || this.normalizeBooleanFlag(server.config.allowInsecure),
             fingerprint: 'chrome',
           };
         }
@@ -1297,7 +1506,7 @@ export class V2RayService {
           security: 'tls',
           tlsSettings: {
             serverName: server.config.sni || server.address,
-            allowInsecure: server.config.allowInsecure === 'true',
+            allowInsecure: globalAllowInsecure || this.normalizeBooleanFlag(server.config.allowInsecure),
             fingerprint: 'chrome',
           },
         };
@@ -1647,7 +1856,7 @@ export class V2RayService {
   }
 
   private measureProxyLatency(): Promise<number> {
-    return this.measureProxyLatencyOnPort(10809, 4000);
+    return this.measureProxyLatencyOnPort(10809, this.proxyRequestTimeoutMs);
   }
 
   private async measureProxyLatencyOnPort(port: number, timeoutMs: number = 4000): Promise<number> {
@@ -1708,11 +1917,12 @@ export class V2RayService {
     });
   }
 
-  private async waitForV2RayReady(): Promise<void> {
+  private async waitForV2RayReady(timeoutMs: number = 10000): Promise<void> {
     // Wait for V2Ray to be ready by checking if the proxy ports are accepting connections
     console.log('[V2RayService] Waiting for V2Ray proxy ports to open...');
-    const maxAttempts = 50; // 50 attempts * 200ms = 10 seconds max
+    const safeTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 10000;
     const delayMs = 200;
+    const maxAttempts = Math.max(1, Math.floor(safeTimeoutMs / delayMs));
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
@@ -1739,7 +1949,7 @@ export class V2RayService {
       await new Promise(resolve => setTimeout(resolve, delayMs));
     }
 
-    console.warn('[V2RayService] ⚠ V2Ray may not be fully ready after 10 seconds, but proceeding anyway');
+    console.warn(`[V2RayService] ⚠ V2Ray may not be fully ready after ${safeTimeoutMs}ms, but proceeding anyway`);
   }
 
   private async testSOCKSConnection(): Promise<boolean> {

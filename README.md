@@ -1,252 +1,148 @@
 # V2Ray VPN Client
 
-A full-featured V2Ray VPN client for macOS with system-wide proxy support.
+Desktop V2Ray client built with Electron + React.
+
+It provides server management, connection monitoring, proxy mode control, app-level routing policies, and GitHub-based update checks from inside Settings.
 
 ![V2Ray VPN Client Screenshot](Screenshot.png)
 
-## ✨ Features
+## Features
 
-- ✅ **Full VPN functionality** - routes all system traffic through the proxy
-- ✅ **DNS Leak Prevention** - all DNS queries routed through VPN tunnel
-- ✅ **Protocol Support**: VLESS, VMess, Trojan, and Shadowsocks
-- ✅ **Transport Support**: WebSocket, gRPC, and TCP
-- ✅ **System Proxy Integration**: HTTP, HTTPS, SOCKS5
-- ✅ **Real-time Statistics**: Speed, data usage, and ping monitoring
-- ✅ **URI Import**: Import servers from vless://, vmess://, trojan://, ss:// links
-- ✅ **Per-app Routing**: Route specific applications through the proxy
-- ✅ **Ad Blocking**: Built-in ad and malware protection
-- ✅ **DNS Protection**: Prevents DNS leaks with secure DNS providers
-- ✅ **Kill Switch**: Blocks internet if VPN disconnects (optional) - *in progress*
-- ✅ **Multiple Routing Modes**: Full VPN, Per-App, PAC, Bypass, Rule-based
-- ✅ **Custom DNS**: Cloudflare, Google, Quad9, OpenDNS, or custom servers
+- V2Ray protocols: VLESS, VMess, Trojan, Shadowsocks
+- Transport types: TCP, WebSocket, gRPC
+- Real-time connection stats: up/down speed, totals, ping, duration
+- DNS provider control: Cloudflare, Google, Quad9, OpenDNS, custom
+- Security toggles: kill switch, IPv6 disable, ad/tracker blocking
+- Proxy modes: Global, Per-app, PAC
+- App routing policies: Follow Global, Bypass VPN, Use VPN
+- Routing diagnostics and capability-aware policy enforcement
+- Custom title bar with app-themed window controls
+- Build and update section in Settings with GitHub release checks
 
----
+## Project Structure
 
-## 🚀 Quick Start
+```text
+src/
+├── main/        Electron main process (window, IPC, system integration)
+├── renderer/    React UI
+├── services/    V2Ray, proxy manager, app routing, routing manager
+├── db/          storage abstraction
+└── types/       preload/renderer TypeScript types
+```
 
-### 1. Install Dependencies
+## Requirements
+
+- Node.js 18+
+- npm 9+
+- macOS/Windows/Linux for desktop runtime
+- V2Ray core binaries (included in `v2ray-core/` or downloaded via `setup.sh`)
+
+## Development
+
+Install dependencies:
 
 ```bash
 npm install
 ```
 
-### 2. Download V2Ray Core
-
-```bash
-chmod +x setup.sh && ./setup.sh
-```
-
-Or manually download from: https://github.com/v2fly/v2ray-core/releases
-
-### 3. Run in Development Mode
+Run app in development mode:
 
 ```bash
 npm run dev
 ```
 
-### 4. Build for Production
+## Build
+
+Build renderer + main process:
 
 ```bash
 npm run build
+```
+
+Create distributables with Electron Builder:
+
+```bash
 npm run dist
 ```
 
----
+Publish distributables to GitHub Releases (downloadable by users):
 
-## 📖 How to Use
-
-### Adding a Server
-
-1. Click **"Add Server"** button
-2. Choose one of the following methods:
-   - **Import from URI**: Paste your vless://, vmess://, trojan://, or ss:// URI
-   - **Manual Configuration**: Fill in server details manually
-
-**Example VLESS URI:**
-```
-vless://uuid@server.com:443?type=ws&path=/&security=tls&sni=server.com#MyServer
+```bash
+GH_TOKEN=your_github_token npm run dist:github
 ```
 
-### Connecting to VPN
+## Main App Flow
 
-1. Select a server from the list
-2. Click **"Connect"** button
-3. Grant system proxy permissions when prompted (requires admin password)
-4. ✅ All system traffic will now route through the VPN
+1. Add/import server config in **Servers** tab.
+2. Connect from the connection bar.
+3. Choose proxy behavior in **Settings**.
+4. Manage app policies in **Routing**.
+5. Apply app routing immediately with **Apply Now** when needed.
+6. Disconnect to stop VPN and cleanup proxy state.
 
-### Monitoring Connection
+## Proxy Modes
 
-Once connected, you'll see:
-- 📊 Upload/Download speed in Mbps
-- 📈 Total data transferred
-- 🏓 Connection ping/latency
-- ⏱️ Connection duration
+### Global
 
-### Disconnecting
+- System proxy enabled.
+- Default route is VPN.
+- Use app policy **Bypass VPN** for selected direct apps.
 
-Click **"Disconnect"** button to stop the VPN and restore normal network settings.
+### Per-app
 
----
+- System proxy stays disabled.
+- Default route is direct.
+- Use app policy **Use VPN** for selected apps that support proxy-forced launch.
 
-## ⚙️ Configuration
+### PAC
 
-### Routing Modes
+- Auto-proxy (PAC) enabled.
+- Default route is VPN via PAC rules.
+- Per-app direct behavior depends on app capability and PAC/system behavior.
 
-- **Full VPN Mode** (Default): Routes all traffic through the proxy, just like V2Box/V2RayNG
-  - All DNS queries routed through VPN
-  - Only localhost bypassed
-  - Prevents DNS leaks
-- **Per-App Mode**: Launch specific applications with proxy environment variables
-  - Use "Launch with Proxy" button in App Routing tab
-  - Apps inherit proxy settings
-- **PAC Mode**: Proxy Auto-Configuration file
-  - Automatic proxy selection based on URL patterns
-- **Bypass Mode**: Route selected apps directly (bypass VPN)
-  - Configure in App Routing tab
-- **Rule-Based Mode**: Custom routing rules
-  - Advanced users can define specific routing logic
+## App Routing Policies
 
-### DNS Configuration
+- **Follow Global**: no explicit app override, app follows current proxy mode default.
+- **Bypass VPN**: relaunch app in direct mode when enforceable.
+- **Use VPN**: relaunch app with proxy args/env when enforceable.
 
-The app supports multiple secure DNS providers to prevent DNS leaks:
-- **Cloudflare (1.1.1.1)**: Fast and privacy-focused (default)
-- **Google (8.8.8.8)**: Reliable and widely available
-- **Quad9 (9.9.9.9)**: Security and privacy focused
-- **OpenDNS (208.67.222.222)**: Family-safe filtering
-- **Custom**: Use your own DNS servers
+The app surfaces capability constraints (for example engine/platform-specific limitations) in the UI and routing diagnostics.
 
-All DNS queries are routed through the VPN tunnel to prevent leaks.
+## Settings Overview
 
-### Security Features
+- Connection: auto-connect, reconnect on disconnect, ping display
+- DNS: provider selection + custom DNS support
+- Security: kill switch, IPv6 disable
+- Network: allow insecure, timeout, proxy mode
+- Privacy: anonymous usage-data toggle
+- Builds & Updates:
+  - Current app version/platform/electron info
+  - GitHub owner/repo fields
+  - **Check for Updates** (reads latest release from GitHub API)
+  - **Update from GitHub** (downloads platform installer from latest release and opens it)
 
-- **Kill Switch**: Blocks all internet traffic if VPN disconnects (optional)
-- **DNS Leak Prevention**: All DNS queries routed through VPN
-- **Ad Blocking**: Blocks ads and trackers using V2Ray's built-in rules
-- **IPv6 Leak Prevention**: Option to disable IPv6 if server doesn't support it
+## GitHub Update Configuration
 
-### Proxy Ports
+Default repository values in Settings:
 
-- **SOCKS5**: 127.0.0.1:10808
-- **HTTP/HTTPS**: 127.0.0.1:10809
+- Owner: `Mr-Ahmadi`
+- Repository: `V2RAY-VPN`
 
----
+Change these fields if you publish builds from a different repository.
 
-## 🛠️ Project Structure
+To publish downloadable builds for the in-app updater:
 
-```
-src/
-├── main/           # Electron main process
-├── renderer/       # React UI components
-├── services/       # Core services (V2Ray, proxy, routing)
-├── db/            # SQLite database
-└── types/         # TypeScript definitions
-```
+1. Create a GitHub release or run `GH_TOKEN=... npm run dist:github`.
+2. Ensure release assets contain platform installers (`.dmg`/`.exe`/`.AppImage` etc).
+3. In Settings, keep owner/repo pointed to that repository.
 
-### Key Services
+## Troubleshooting
 
-- **V2RayService**: Manages V2Ray process and configuration
-- **SystemProxyManager**: Handles macOS system proxy settings
-- **ServerManager**: Server CRUD operations
-- **AppRoutingService**: Per-app routing functionality
+- Ensure V2Ray core is present and executable.
+- Verify server credentials/transport settings.
+- For per-app mode, confirm selected app supports forced proxy routing.
+- For system-level behavior checks, use Routing diagnostics in-app.
 
----
-
-## 🐛 Troubleshooting
-
-### VPN connects but no internet traffic
-
-**This issue has been fixed!** The app now properly routes all traffic through the VPN tunnel.
-
-If you still experience issues:
-1. Check if V2Ray core is running: `ps aux | grep v2ray`
-2. Verify system proxy is enabled: System Preferences → Network → Advanced → Proxies
-3. Check V2Ray logs in the app console
-4. Try disconnecting and reconnecting
-5. Test DNS leak: Visit https://dnsleaktest.com/
-6. Check your IP: Visit https://whatismyipaddress.com/
-
-### DNS Leaks
-
-**Fixed!** All DNS queries are now routed through the VPN tunnel:
-- DNS `domainStrategy` set to `IPIfNonMatch`
-- DNS outbound protocol configured
-- Secure DNS providers (Cloudflare, Google, Quad9, OpenDNS)
-- Test at https://dnsleaktest.com/
-
-### Permission errors
-
-The app needs administrator privileges to configure system proxy settings. You'll be prompted for your password when connecting.
-
-### Stats showing 0.00 Mb/s
-
-Stats are calculated based on active connections. Try:
-1. Open a web browser and visit a website
-2. Wait a few seconds for stats to update
-3. Stats update every second
-
-### Server connection fails
-
-1. Verify server details are correct
-2. Check if the server is online
-3. Try testing the server with "Ping" button
-4. Check firewall settings
-
----
-
-## 🔧 Technical Details
-
-### V2Ray Configuration
-
-The app generates optimized V2Ray configurations with:
-- **DNS Leak Prevention**: All DNS queries routed through proxy with `IPIfNonMatch` strategy
-- **Secure DNS**: Configurable DNS providers (Cloudflare, Google, Quad9, OpenDNS, Custom)
-- **Traffic sniffing**: Better routing decisions based on traffic type
-- **Ad blocking**: Optional blocking of ads and trackers (geosite:category-ads-all)
-- **Minimal bypass**: Only localhost bypassed (127.0.0.0/8)
-- **Multiplexing**: Better performance when supported by protocol
-- **Stats API**: Real-time upload/download speed tracking
-
-### Routing Logic
-
-V2Ray routing rules are processed top-to-bottom, first match wins:
-1. **Localhost bypass** (127.0.0.0/8) - prevents routing loops
-2. **Ad blocking** (optional) - blocks ads and trackers
-3. **Default to proxy** - all other traffic routed through VPN
-
-This ensures ALL traffic (except localhost) goes through the VPN tunnel.
-
-### System Integration
-
-- Automatically configures macOS system proxy settings
-- SOCKS5 proxy on 127.0.0.1:10808 (primary, handles all traffic types)
-- HTTP/HTTPS proxy on 127.0.0.1:10809 (web traffic)
-- Minimal bypass list: only "127.0.0.1,localhost"
-- Properly cleans up on disconnect
-- Handles app quit gracefully
-
-### Why Traffic Now Routes Correctly
-
-**Previous Issues:**
-1. DNS `domainStrategy` was `AsIs` - didn't force DNS through proxy
-2. No DNS outbound protocol - DNS queries leaked
-3. Incomplete routing rules - traffic could bypass VPN
-4. System proxy order - HTTP/HTTPS before SOCKS
-
-**Fixes Applied:**
-1. Changed to `IPIfNonMatch` - forces domain resolution through proxy DNS
-2. Added DNS outbound with `protocol: 'dns'`
-3. Simplified routing: only bypass localhost, everything else to proxy
-4. Enable SOCKS first (most universal), then HTTP/HTTPS
-
----
-
-## 📝 License
+## License
 
 MIT
-
-## 🙏 Credits
-
-- [V2Ray Core](https://github.com/v2fly/v2ray-core)
-- [Electron](https://www.electronjs.org/)
-- [React](https://reactjs.org/)
-- [Material-UI](https://mui.com/)

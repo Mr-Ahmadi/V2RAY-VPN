@@ -1,6 +1,6 @@
 {
   "name": "v2ray-vpn",
-  "version": "1.0.0",
+  "version": "0.1.0-beta.1",
   "description": "V2Ray VPN client with per-app routing support",
   "author": "V2Ray VPN Team",
   "main": "dist/main/main/index.js",
@@ -16,7 +16,8 @@
     "build:main": "tsc --project tsconfig.main.json",
     "fix:package": "node -e \"const pkg = require('./package.json'); pkg.type = 'commonjs'; require('fs').writeFileSync('./dist/package.json', JSON.stringify(pkg, null, 2))\"",
     "pack": "electron-builder --publish=never",
-    "dist": "npm run build && electron-builder",
+    "dist": "npm run build && electron-builder --publish=never",
+    "dist:github": "npm run build && electron-builder --publish=always",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },

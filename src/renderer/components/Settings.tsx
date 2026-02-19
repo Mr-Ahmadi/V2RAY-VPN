@@ -15,14 +15,49 @@ import {
   InputLabel,
   CircularProgress,
   Grid,
+  Alert,
 } from '@mui/material';
+
+type RoutingMode = 'full' | 'bypass' | 'rule';
+type ProxyMode = 'global' | 'per-app' | 'pac';
+
+const normalizeProxyMode = (mode: unknown): ProxyMode => {
+  if (mode === 'per-app' || mode === 'pac') return mode;
+  return 'global';
+};
+
+const deriveRoutingModeFromProxyMode = (mode: ProxyMode): RoutingMode => {
+  if (mode === 'per-app') return 'rule';
+  return 'full';
+};
 
 export default function Settings() {
   const [settings, setSettings] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [routingMode, setRoutingMode] = useState<'full' | 'bypass' | 'rule'>('full');
-  const [proxyMode, setProxyMode] = useState<'global' | 'per-app' | 'pac'>('global');
+  const [routingMode, setRoutingMode] = useState<RoutingMode>('full');
+  const [proxyMode, setProxyMode] = useState<ProxyMode>('global');
+  const [checkingUpdates, setCheckingUpdates] = useState(false);
+  const [downloadingUpdate, setDownloadingUpdate] = useState(false);
+  const [appInfo, setAppInfo] = useState<{
+    version: string;
+    platform: string;
+    arch: string;
+    electron: string;
+  } | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<{
+    owner: string;
+    repo: string;
+    currentVersion: string;
+    latestVersion: string;
+    hasUpdate: boolean;
+    releaseName: string;
+    releaseUrl: string;
+    downloadUrl: string | null;
+    assetName: string | null;
+    publishedAt: string | null;
+  } | null>(null);
+  const [updateError, setUpdateError] = useState<string>('');
 
   useEffect(() => {
     loadSettings();
@@ -33,9 +68,19 @@ export default function Settings() {
       setLoading(true);
       const result = await window.electronAPI.settings.get();
       if (result.success) {
-        setSettings(result.data);
-        setRoutingMode(result.data.routingMode || 'full');
-        setProxyMode(result.data.proxyMode || 'global');
+        const loadedSettings = {
+          githubRepoOwner: 'Mr-Ahmadi',
+          githubRepoName: 'V2RAY-VPN',
+          ...result.data,
+        };
+        setSettings(loadedSettings);
+        const loadedProxyMode = normalizeProxyMode(loadedSettings.proxyMode);
+        setProxyMode(loadedProxyMode);
+        setRoutingMode(deriveRoutingModeFromProxyMode(loadedProxyMode));
+      }
+      const appInfoResult = await window.electronAPI.updates.getAppInfo();
+      if (appInfoResult?.success) {
+        setAppInfo(appInfoResult.data);
       }
     } catch (error) {
       console.error('Error loading settings:', error);
@@ -47,7 +92,13 @@ export default function Settings() {
   const handleSaveSettings = async () => {
     try {
       setSaving(true);
-      const settingsToSave = { ...settings, routingMode, proxyMode };
+      const normalizedRoutingMode = deriveRoutingModeFromProxyMode(proxyMode);
+      setRoutingMode(normalizedRoutingMode);
+      const settingsToSave = {
+        ...settings,
+        routingMode: normalizedRoutingMode,
+        proxyMode,
+      };
       const result = await window.electronAPI.settings.save(settingsToSave);
       if (result.success) {
         // Show success message
@@ -63,6 +114,52 @@ export default function Settings() {
   const handleSettingChange = (key: string, value: any) => {
     setSettings(prev => ({ ...prev, [key]: value }));
   };
+
+  const handleCheckUpdates = async () => {
+    try {
+      setCheckingUpdates(true);
+      setUpdateError('');
+      const owner = String(settings.githubRepoOwner || 'Mr-Ahmadi').trim();
+      const repo = String(settings.githubRepoName || 'V2RAY-VPN').trim();
+      const result = await window.electronAPI.updates.checkGithub({ owner, repo });
+      if (!result.success) {
+        setUpdateInfo(null);
+        setUpdateError(result.error || 'Failed to check for updates');
+        return;
+      }
+      setUpdateInfo(result.data);
+    } catch (error) {
+      setUpdateInfo(null);
+      setUpdateError(error instanceof Error ? error.message : 'Failed to check for updates');
+    } finally {
+      setCheckingUpdates(false);
+    }
+  };
+
+  const handleOpenGithubUpdate = async () => {
+    const owner = String(settings.githubRepoOwner || 'Mr-Ahmadi').trim();
+    const repo = String(settings.githubRepoName || 'V2RAY-VPN').trim();
+    try {
+      setDownloadingUpdate(true);
+      setUpdateError('');
+      const result = await window.electronAPI.updates.downloadAndInstallGithub({ owner, repo });
+      if (!result?.success) {
+        const targetUrl = updateInfo?.downloadUrl || updateInfo?.releaseUrl || `https://github.com/${owner}/${repo}/releases/latest`;
+        await window.electronAPI.updates.openGithubRelease(targetUrl);
+      }
+    } catch (error) {
+      setUpdateError(error instanceof Error ? error.message : 'Failed to open GitHub release page');
+    } finally {
+      setDownloadingUpdate(false);
+    }
+  };
+
+  const proxyModeGuidance =
+    proxyMode === 'per-app'
+      ? 'Per-app: system proxy stays off. Choose apps as "Use VPN" in Routing tab, then click "Apply Now".'
+      : proxyMode === 'pac'
+        ? 'PAC: system auto-proxy is enabled. Most traffic is proxied; use Routing tab to bypass supported apps.'
+        : 'Global: all traffic uses VPN by default. Use Routing tab to bypass selected apps.';
 
   if (loading) {
     return (
@@ -111,7 +208,11 @@ export default function Settings() {
                   onChange={async (e) => {
                     const v = e.target.checked;
                     handleSettingChange('enablePingCalculation', v);
-                    await window.electronAPI.settings.togglePing(v);
+                    try {
+                      await window.electronAPI.settings.togglePing(v);
+                    } catch (error) {
+                      console.error('Error toggling ping calculation:', error);
+                    }
                   }}
                 />
               }
@@ -243,7 +344,7 @@ export default function Settings() {
                 <Select
                   value={settings.connectionTimeout || 30}
                   label="Connection Timeout (seconds)"
-                  onChange={(e) => handleSettingChange('connectionTimeout', e.target.value)}
+                  onChange={(e) => handleSettingChange('connectionTimeout', Number(e.target.value))}
                 >
                   <MenuItem value={10}>10 seconds</MenuItem>
                   <MenuItem value={30}>30 seconds</MenuItem>
@@ -258,7 +359,11 @@ export default function Settings() {
                   <Select
                     value={proxyMode}
                     label="Proxy Mode"
-                    onChange={(e) => setProxyMode(e.target.value as any)}
+                    onChange={(e) => {
+                      const nextProxyMode = normalizeProxyMode(e.target.value);
+                      setProxyMode(nextProxyMode);
+                      setRoutingMode(deriveRoutingModeFromProxyMode(nextProxyMode));
+                    }}
                   >
                     <MenuItem value="global">Global (system proxy)</MenuItem>
                     <MenuItem value="per-app">Per-app (launch apps with proxy)</MenuItem>
@@ -268,21 +373,11 @@ export default function Settings() {
               </Box>
 
               <Box sx={{ mt: 2 }}>
-                <FormControl fullWidth>
-                  <InputLabel>Routing Strategy</InputLabel>
-                  <Select
-                    value={routingMode}
-                    label="Routing Strategy"
-                    onChange={(e) => setRoutingMode(e.target.value as any)}
-                  >
-                    <MenuItem value="full">Route all traffic through proxy</MenuItem>
-                    <MenuItem value="bypass">Bypass selected apps (in Routing tab)</MenuItem>
-                    <MenuItem value="rule">Route selected apps through proxy (in Routing tab)</MenuItem>
-                  </Select>
-                </FormControl>
+                <Typography variant="caption" sx={{ display: 'block', color: 'var(--text-secondary)' }}>
+                  Effective routing strategy: <strong>{routingMode}</strong>
+                </Typography>
                 <Typography variant="caption" sx={{ display: 'block', mt: 1, color: 'text.secondary' }}>
-                  Some apps ignore system proxy settings. Use the Routing tab to launch apps directly with the
-                  desired policy.
+                  {proxyModeGuidance}
                 </Typography>
               </Box>
             </Box>
@@ -305,6 +400,71 @@ export default function Settings() {
               }
               label="Help improve by sharing anonymous usage data"
             />
+              </CardContent>
+            </Card>
+          </Grid>
+
+          <Grid item xs={12}>
+            <Card sx={{ backgroundColor: 'var(--bg-card)' }}>
+              <CardContent>
+                <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
+                  Builds & Updates
+                </Typography>
+                <Typography variant="caption" sx={{ color: 'var(--text-secondary)', display: 'block', mb: 2 }}>
+                  Check releases from GitHub and update from the latest published build.
+                </Typography>
+
+                <Box sx={{ mb: 1.5 }}>
+                  <Typography variant="body2">
+                    App version: <strong>{appInfo?.version || '-'}</strong>
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: 'var(--text-secondary)' }}>
+                    Platform: {appInfo?.platform || '-'} | Arch: {appInfo?.arch || '-'} | Electron: {appInfo?.electron || '-'}
+                  </Typography>
+                </Box>
+
+                <Grid container spacing={2}>
+                  <Grid item xs={12} md={6}>
+                    <TextField
+                      fullWidth
+                      label="GitHub Owner"
+                      value={settings.githubRepoOwner || ''}
+                      onChange={(e) => handleSettingChange('githubRepoOwner', e.target.value)}
+                    />
+                  </Grid>
+                  <Grid item xs={12} md={6}>
+                    <TextField
+                      fullWidth
+                      label="GitHub Repository"
+                      value={settings.githubRepoName || ''}
+                      onChange={(e) => handleSettingChange('githubRepoName', e.target.value)}
+                    />
+                  </Grid>
+                </Grid>
+
+                <Box sx={{ display: 'flex', gap: 1.5, mt: 2, flexWrap: 'wrap' }}>
+                  <Button variant="outlined" onClick={handleCheckUpdates} disabled={checkingUpdates}>
+                    {checkingUpdates ? <CircularProgress size={18} /> : 'Check for Updates'}
+                  </Button>
+                  <Button variant="contained" onClick={handleOpenGithubUpdate} disabled={downloadingUpdate}>
+                    {downloadingUpdate ? <CircularProgress size={18} /> : 'Update from GitHub'}
+                  </Button>
+                </Box>
+
+                {updateInfo && (
+                  <Alert severity={updateInfo.hasUpdate ? 'success' : 'info'} sx={{ mt: 2 }}>
+                    {updateInfo.hasUpdate
+                      ? `Update available: ${updateInfo.latestVersion} (current: ${updateInfo.currentVersion})`
+                      : `You are up to date (${updateInfo.currentVersion}).`}
+                    {updateInfo.assetName ? ` Asset: ${updateInfo.assetName}.` : ''}
+                  </Alert>
+                )}
+
+                {updateError && (
+                  <Alert severity="error" sx={{ mt: 2 }}>
+                    {updateError}
+                  </Alert>
+                )}
               </CardContent>
             </Card>
           </Grid>

@@ -23,6 +23,14 @@
   "extraMetadata": {
     "main": "dist/main/main/index.js"
   },
+  "publish": [
+    {
+      "provider": "github",
+      "owner": "Mr-Ahmadi",
+      "repo": "V2RAY-VPN",
+      "releaseType": "release"
+    }
+  ],
   "mac": {
     "target": [
       "dmg",

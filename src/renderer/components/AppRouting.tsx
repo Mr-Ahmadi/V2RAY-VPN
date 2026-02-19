@@ -35,6 +35,12 @@ import {
 type AppRoutePolicy = 'none' | 'bypass' | 'vpn';
 type PolicyFilter = 'all' | AppRoutePolicy;
 type Notice = { severity: 'success' | 'error' | 'info'; message: string };
+type ProxyMode = 'global' | 'per-app' | 'pac';
+
+const normalizeProxyMode = (mode: unknown): ProxyMode => {
+  if (mode === 'per-app' || mode === 'pac') return mode;
+  return 'global';
+};
 
 interface App {
   name: string;
@@ -57,6 +63,7 @@ export default function AppRouting() {
   const [loading, setLoading] = useState(true);
   const [diagnostics, setDiagnostics] = useState<any>(null);
   const [loadingDiagnostics, setLoadingDiagnostics] = useState(false);
+  const [configuredProxyMode, setConfiguredProxyMode] = useState<ProxyMode>('global');
   const [busyAppPath, setBusyAppPath] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
 
@@ -77,9 +84,10 @@ export default function AppRouting() {
   const loadApps = useCallback(async () => {
     try {
       setLoading(true);
-      const [appsResult, policyResult] = await Promise.all([
+      const [appsResult, policyResult, settingsResult] = await Promise.all([
         window.electronAPI.routing.getApps(),
         window.electronAPI.routing.getAppPolicies(),
+        window.electronAPI.settings.get().catch(() => ({ success: false })),
       ]);
 
       if (appsResult.success) {
@@ -108,6 +116,9 @@ export default function AppRouting() {
       if (policyResult.success) {
         setAppPolicies(policyResult.data);
       }
+      if (settingsResult?.success) {
+        setConfiguredProxyMode(normalizeProxyMode(settingsResult.data?.proxyMode));
+      }
       await loadDiagnostics();
     } catch (error) {
       console.error('Error loading app routing data:', error);
@@ -128,6 +139,22 @@ export default function AppRouting() {
     }
     return map;
   }, [appPolicies]);
+
+  const effectiveProxyMode = useMemo<ProxyMode>(() => {
+    return normalizeProxyMode(diagnostics?.proxyMode || configuredProxyMode);
+  }, [configuredProxyMode, diagnostics?.proxyMode]);
+
+  const followGlobalLabel = 'Follow Global';
+
+  const proxyModeGuidance = useMemo(() => {
+    if (effectiveProxyMode === 'per-app') {
+      return 'Per-app mode: system-wide proxy is OFF. Set selected apps to "Use VPN", then click "Apply Now" to relaunch with VPN routing.';
+    }
+    if (effectiveProxyMode === 'pac') {
+      return 'PAC mode: system uses auto-proxy config. Most traffic uses VPN by default; set app policy to "Bypass VPN" for direct-launch overrides on supported apps.';
+    }
+    return 'Global mode: all apps use VPN by default. Use "Bypass VPN" for selected apps that should go direct.';
+  }, [effectiveProxyMode]);
 
 
 
@@ -167,11 +194,33 @@ export default function AppRouting() {
 
   const isBypassUnavailable = (appName: string): boolean => {
     const engine = detectEngine(appName);
-    const proxyMode = diagnostics?.proxyMode;
+    const proxyMode = effectiveProxyMode;
     return engine === 'safari' && (proxyMode === 'global' || proxyMode === 'pac');
   };
 
+  const isVpnUnavailable = (appName: string): boolean => {
+    const engine = detectEngine(appName);
+    const proxyMode = effectiveProxyMode;
+    return engine === 'safari' && proxyMode === 'per-app';
+  };
+
   const setPolicy = async (appPath: string, policy: AppRoutePolicy) => {
+    const app = allApps.find((item) => item.path === appPath);
+    if (policy === 'bypass' && app && isBypassUnavailable(app.name)) {
+      setNotice({
+        severity: 'error',
+        message: 'Bypass is not enforceable for Safari in Global/PAC mode. Switch Proxy Mode to per-app.',
+      });
+      return;
+    }
+    if (policy === 'vpn' && app && isVpnUnavailable(app.name)) {
+      setNotice({
+        severity: 'error',
+        message: 'Use VPN is not enforceable for Safari in per-app mode. Use Global/PAC mode for Safari VPN routing.',
+      });
+      return;
+    }
+
     setBusyAppPath(appPath);
     try {
       const result = await window.electronAPI.routing.setAppPolicy(appPath, policy);
@@ -185,7 +234,6 @@ export default function AppRouting() {
         if (policy === 'none') {
           return withoutCurrent;
         }
-        const app = allApps.find((item) => item.path === appPath);
         return [...withoutCurrent, { appPath, appName: app?.name || appPath, policy }];
       });
 
@@ -207,7 +255,7 @@ export default function AppRouting() {
       return;
     }
 
-    const defaultRouteIsProxy = diagnostics?.proxyMode !== 'per-app';
+    const defaultRouteIsProxy = effectiveProxyMode !== 'per-app';
     const effectivePolicy: 'bypass' | 'vpn' =
       policy === 'none' ? (defaultRouteIsProxy ? 'vpn' : 'bypass') : policy;
 
@@ -215,6 +263,13 @@ export default function AppRouting() {
       setNotice({
         severity: 'error',
         message: 'Bypass is not enforceable for Safari in Global/PAC mode. Switch Proxy Mode to per-app.',
+      });
+      return;
+    }
+    if (effectivePolicy === 'vpn' && isVpnUnavailable(app.name)) {
+      setNotice({
+        severity: 'error',
+        message: 'Use VPN is not enforceable for Safari in per-app mode. Use Global/PAC mode for Safari VPN routing.',
       });
       return;
     }
@@ -264,7 +319,7 @@ export default function AppRouting() {
       case 'vpn':
         return 'Use VPN';
       default:
-        return 'Follow Global';
+        return followGlobalLabel;
     }
   };
 
@@ -280,10 +335,26 @@ export default function AppRouting() {
     <Box sx={{ py: 3, minHeight: '100%' }}>
       <Container maxWidth="lg">
         <Box sx={{ mb: 3 }}>
-          <Typography variant="h4" sx={{ fontWeight: 700, mb: 1, letterSpacing: '-0.02em' }}>
-            Application Routing
+          <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mb: 1 }}>
+            <Typography variant="h4" sx={{ fontWeight: 700, letterSpacing: '-0.02em' }}>
+              Application Routing
+            </Typography>
+            <Chip
+              size="small"
+              label={`Proxy Mode: ${effectiveProxyMode}`}
+              sx={{
+                color: 'var(--primary)',
+                border: '1px solid rgba(20, 184, 166, 0.35)',
+                backgroundColor: 'rgba(20, 184, 166, 0.12)',
+              }}
+            />
+            {loadingDiagnostics && (
+              <CircularProgress size={16} thickness={5} sx={{ color: 'var(--primary)' }} />
+            )}
+          </Stack>
+          <Typography variant="caption" sx={{ color: 'var(--text-secondary)', display: 'block', mb: 1 }}>
+            {proxyModeGuidance}
           </Typography>
-
         </Box>
 
         <Card className="glass" sx={{ border: 'none', background: 'var(--bg-glass)', mb: 2 }}>
@@ -328,6 +399,7 @@ export default function AppRouting() {
               >
                 <ToggleButton value="all">All</ToggleButton>
                 <ToggleButton value="bypass">Bypass</ToggleButton>
+                <ToggleButton value="vpn">Use VPN</ToggleButton>
                 <ToggleButton value="none">Follow Global</ToggleButton>
               </ToggleButtonGroup>
             </Stack>
@@ -351,6 +423,7 @@ export default function AppRouting() {
                 const isBusy = busyAppPath === app.path;
                 const engineInfo = getEngineIndicator(app.name);
                 const bypassUnavailable = isBypassUnavailable(app.name);
+                const vpnUnavailable = isVpnUnavailable(app.name);
                 return (
                   <React.Fragment key={app.path}>
                     {index > 0 && <Divider sx={{ borderColor: 'rgba(255,255,255,0.05)' }} />}
@@ -395,11 +468,17 @@ export default function AppRouting() {
                               '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(148, 163, 184, 0.6)' },
                             }}
                           >
-                            <MenuItem value="none">Follow Global</MenuItem>
+                            <MenuItem value="none">{followGlobalLabel}</MenuItem>
                             <MenuItem value="bypass" disabled={bypassUnavailable}>
                               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                                 <BypassIcon sx={{ fontSize: 16, color: 'var(--secondary)' }} />
                                 Bypass VPN
+                              </Box>
+                            </MenuItem>
+                            <MenuItem value="vpn" disabled={vpnUnavailable}>
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                <ProxyIcon sx={{ fontSize: 16, color: 'var(--primary)' }} />
+                                Use VPN
                               </Box>
                             </MenuItem>
                           </Select>
@@ -421,6 +500,13 @@ export default function AppRouting() {
                       <Box sx={{ px: 2.5, pb: 1.5 }}>
                         <Typography variant="caption" sx={{ color: 'var(--text-muted)' }}>
                           Bypass is unavailable for Safari while Proxy Mode is Global/PAC.
+                        </Typography>
+                      </Box>
+                    )}
+                    {vpnUnavailable && (
+                      <Box sx={{ px: 2.5, pb: 1.5 }}>
+                        <Typography variant="caption" sx={{ color: 'var(--text-muted)' }}>
+                          Use VPN is unavailable for Safari while Proxy Mode is per-app.
                         </Typography>
                       </Box>
                     )}
