@@ -1,55 +1,85 @@
-# V2Ray VPN Client
+# V2Ray VPN
 
 Desktop V2Ray client built with Electron + React.
 
-It provides server management, connection monitoring, proxy mode control, app-level routing policies, and GitHub-based update checks from inside Settings.
+It provides server management, connection monitoring, proxy mode control, per-app routing policies, and GitHub-based update checks from inside Settings.
 
 ![V2Ray VPN Client Screenshot](Screenshot.png)
 
 ## Features
 
-- V2Ray protocols: VLESS, VMess, Trojan, Shadowsocks
-- Transport types: TCP, WebSocket, gRPC
-- Real-time connection stats: up/down speed, totals, ping, duration
-- DNS provider control: Cloudflare, Google, Quad9, OpenDNS, custom
+- Supported protocols: VLESS, VMess, Trojan, Shadowsocks
+- Supported transports: TCP, WebSocket, gRPC
+- Real-time stats: up/down speed, totals, ping, duration
+- DNS controls: Cloudflare, Google, Quad9, OpenDNS, custom DNS
 - Security toggles: kill switch, IPv6 disable, ad/tracker blocking
 - Proxy modes: Global, Per-app, PAC
-- App routing policies: Follow Global, Bypass VPN, Use VPN
+- App policies: Follow Global, Bypass VPN, Use VPN
 - Routing diagnostics and capability-aware policy enforcement
-- Custom title bar with app-themed window controls
-- Build and update section in Settings with GitHub release checks
+- In-app GitHub release check and update download flow
+
+## Tech Stack
+
+- Electron (main process + desktop packaging)
+- React + Material UI (renderer)
+- TypeScript
+- electron-builder
 
 ## Project Structure
 
 ```text
 src/
-├── main/        Electron main process (window, IPC, system integration)
+├── main/        Electron main process (window, IPC, platform integration)
 ├── renderer/    React UI
-├── services/    V2Ray, proxy manager, app routing, routing manager
+├── services/    V2Ray control, proxy manager, routing manager
 ├── db/          storage abstraction
-└── types/       preload/renderer TypeScript types
+└── types/       preload/renderer shared types
 ```
 
 ## Requirements
 
 - Node.js 18+
 - npm 9+
-- macOS/Windows/Linux for desktop runtime
-- V2Ray core binaries (included in `v2ray-core/` or downloaded via `setup.sh`)
+- macOS/Windows/Linux
+- V2Ray core binaries available in `v2ray-core/`
 
-## Development
+## Environment Variables
 
-Install dependencies:
+Create `.env` from `.env.example` if needed.
+
+```env
+SKIP_PREFLIGHT_CHECK=true
+TSC_COMPILE_ON_ERROR=false
+NODE_ENV=development
+V2RAY_API_PORT=10085
+APP_NAME=V2Ray VPN
+```
+
+## Setup
+
+1. Install dependencies:
 
 ```bash
 npm install
 ```
 
-Run app in development mode:
+2. Ensure `v2ray-core` exists and includes an executable `v2ray` binary.
+
+You can use the helper script:
+
+```bash
+chmod +x setup.sh && ./setup.sh
+```
+
+## Development
+
+Run the app in development mode:
 
 ```bash
 npm run dev
 ```
+
+This starts the React dev server and Electron process together.
 
 ## Build
 
@@ -59,89 +89,96 @@ Build renderer + main process:
 npm run build
 ```
 
-Create distributables with Electron Builder:
+Create distributables locally (no publish):
 
 ```bash
 npm run dist
 ```
 
-Publish distributables to GitHub Releases (downloadable by users):
+## Publish to GitHub Releases
+
+Publish artifacts with electron-builder:
 
 ```bash
 GH_TOKEN=your_github_token npm run dist:github
 ```
 
-## Main App Flow
+Important:
 
-1. Add/import server config in **Servers** tab.
-2. Connect from the connection bar.
-3. Choose proxy behavior in **Settings**.
+- Use a token with proper repository release permissions.
+- Do not commit or share `GH_TOKEN` values.
+- Artifacts are generated with this naming pattern:
+  - `V2Ray-VPN-${version}-${arch}.${ext}`
+
+## App Usage Flow
+
+1. Add/import server config in **Servers**.
+2. Connect from **Connection Bar**.
+3. Configure proxy mode in **Settings**.
 4. Manage app policies in **Routing**.
-5. Apply app routing immediately with **Apply Now** when needed.
-6. Disconnect to stop VPN and cleanup proxy state.
+5. Apply routing changes when needed.
 
 ## Proxy Modes
 
 ### Global
 
-- System proxy enabled.
-- Default route is VPN.
-- Use app policy **Bypass VPN** for selected direct apps.
+- System proxy enabled
+- Default route is VPN
+- Use app policy **Bypass VPN** for selected direct apps
 
 ### Per-app
 
-- System proxy stays disabled.
-- Default route is direct.
-- Use app policy **Use VPN** for selected apps that support proxy-forced launch.
+- System proxy disabled
+- Default route is direct
+- Use app policy **Use VPN** for selected apps that support forced proxy launch
 
 ### PAC
 
-- Auto-proxy (PAC) enabled.
-- Default route is VPN via PAC rules.
-- Per-app direct behavior depends on app capability and PAC/system behavior.
+- Auto-proxy enabled
+- Default route is VPN through PAC rules
+- Per-app behavior depends on platform/application capability
 
-## App Routing Policies
+## In-App GitHub Update Configuration
 
-- **Follow Global**: no explicit app override, app follows current proxy mode default.
-- **Bypass VPN**: relaunch app in direct mode when enforceable.
-- **Use VPN**: relaunch app with proxy args/env when enforceable.
-
-The app surfaces capability constraints (for example engine/platform-specific limitations) in the UI and routing diagnostics.
-
-## Settings Overview
-
-- Connection: auto-connect, reconnect on disconnect, ping display
-- DNS: provider selection + custom DNS support
-- Security: kill switch, IPv6 disable
-- Network: allow insecure, timeout, proxy mode
-- Privacy: anonymous usage-data toggle
-- Builds & Updates:
-  - Current app version/platform/electron info
-  - GitHub owner/repo fields
-  - **Check for Updates** (reads latest release from GitHub API)
-  - **Update from GitHub** (downloads platform installer from latest release and opens it)
-
-## GitHub Update Configuration
-
-Default repository values in Settings:
+Defaults in Settings:
 
 - Owner: `Mr-Ahmadi`
 - Repository: `V2RAY-VPN`
 
-Change these fields if you publish builds from a different repository.
-
-To publish downloadable builds for the in-app updater:
-
-1. Create a GitHub release or run `GH_TOKEN=... npm run dist:github`.
-2. Ensure release assets contain platform installers (`.dmg`/`.exe`/`.AppImage` etc).
-3. In Settings, keep owner/repo pointed to that repository.
+If you publish from another repository, update these values in Settings.
 
 ## Troubleshooting
 
-- Ensure V2Ray core is present and executable.
-- Verify server credentials/transport settings.
-- For per-app mode, confirm selected app supports forced proxy routing.
-- For system-level behavior checks, use Routing diagnostics in-app.
+- Verify `v2ray-core/v2ray` exists and is executable.
+- Verify server credentials and transport settings.
+- For per-app mode, confirm selected apps support enforced proxy launch.
+- Use in-app routing diagnostics for system-level behavior checks.
+
+### macOS: “V2Ray VPN is damaged and can’t be opened”
+
+This is usually Gatekeeper quarantine for downloaded unsigned/unnotarized builds.
+
+Unquarantine installed app:
+
+```bash
+find "/Applications/V2Ray VPN.app" -exec xattr -d com.apple.quarantine {} \; 2>/dev/null
+```
+
+Unquarantine downloaded installer (before install), example:
+
+```bash
+xattr -d com.apple.quarantine ~/Downloads/V2Ray-VPN-0.1.0-beta.1-arm64.dmg
+```
+
+For public distribution, proper fix is Apple Developer ID signing + notarization.
+
+## Diagnostics Script
+
+Run system checks on macOS:
+
+```bash
+chmod +x diagnose.sh && ./diagnose.sh
+```
 
 ## License
 

@@ -5,6 +5,7 @@
     "buildResources": "public",
     "output": "dist"
   },
+  "artifactName": "V2Ray-VPN-${version}-${arch}.${ext}",
   "files": [
     "package.json",
     "dist/main",
