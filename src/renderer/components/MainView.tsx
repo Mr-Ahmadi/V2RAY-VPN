@@ -74,11 +74,11 @@ export default function MainView() {
           backdropFilter: 'blur(8px)',
           WebkitBackdropFilter: 'blur(8px)',
           borderBottom: '1px solid rgba(56, 189, 248, 0.12)',
-          pb: 1,
+          pb: 0.5,
         }}
       >
         <ConnectionBar />
-        <Box sx={{ px: { xs: 1, sm: 2 }, pt: 1 }}>
+        <Box sx={{ px: { xs: 1, sm: 1.5 }, pt: 0.5 }}>
           <Tabs
             value={value}
             onChange={handleChange}
@@ -90,22 +90,23 @@ export default function MainView() {
               backgroundColor: 'rgba(16, 25, 35, 0.78)',
               border: '1px solid var(--border-light)',
               borderRadius: 3,
-              minHeight: 58,
-              p: 0.5,
+              minHeight: 46,
+              p: 0.375,
               boxShadow: 'inset 0 1px 0 rgba(148, 163, 184, 0.1)',
               '& .MuiTabs-scrollButtons': {
                 color: 'var(--text-secondary)',
               },
               '& .MuiTab-root': {
                 color: 'var(--text-secondary)',
-                minHeight: 48,
+                minHeight: 38,
                 borderRadius: 2,
-                minWidth: isMobile ? 120 : 'auto',
-                px: { xs: 1.25, sm: 2.5 },
+                minWidth: isMobile ? 104 : 'auto',
+                px: { xs: 1, sm: 2 },
+                py: 0.25,
                 transition: 'all 0.2s ease',
                 '&.Mui-selected': { color: 'var(--text-primary)' },
                 '& .MuiSvgIcon-root': {
-                  fontSize: 18,
+                  fontSize: 16,
                 },
               },
               '& .MuiTabs-indicator': {

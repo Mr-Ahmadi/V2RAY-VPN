@@ -781,6 +781,65 @@ describe('V2RayService - Routing Rules', () => {
       expect(ipv6DisabledConfig.dns.queryStrategy).toBe('UseIPv4');
       expect(dualStackConfig.dns.queryStrategy).toBe('UseIP');
     });
+
+    test('sanitizes custom DNS values and removes duplicates', async () => {
+      const config = await (service as any).generateV2RayConfig(
+        {
+          id: 'test-server',
+          name: 'Test Server',
+          protocol: 'vless',
+          address: 'example.com',
+          port: 443,
+          config: {
+            id: 'test-uuid',
+            encryption: 'none',
+          },
+        },
+        'full',
+        [],
+        {
+          dnsProvider: 'custom',
+          primaryDns: ' 1.1.1.1, 8.8.8.8 invalid-ip ',
+          secondaryDns: '8.8.8.8\n9.9.9.9',
+          blockAds: false,
+        }
+      );
+
+      expect(config.dns.servers).toEqual([
+        { address: '1.1.1.1', port: 53 },
+        { address: '8.8.8.8', port: 53 },
+        { address: '9.9.9.9', port: 53 },
+      ]);
+    });
+
+    test('falls back to Cloudflare when custom DNS values are invalid', async () => {
+      const config = await (service as any).generateV2RayConfig(
+        {
+          id: 'test-server',
+          name: 'Test Server',
+          protocol: 'vless',
+          address: 'example.com',
+          port: 443,
+          config: {
+            id: 'test-uuid',
+            encryption: 'none',
+          },
+        },
+        'full',
+        [],
+        {
+          dnsProvider: 'custom',
+          primaryDns: 'not-a-valid-dns-value',
+          secondaryDns: '',
+          blockAds: false,
+        }
+      );
+
+      expect(config.dns.servers).toEqual([
+        { address: '1.1.1.1', port: 53 },
+        { address: '1.0.0.1', port: 53 },
+      ]);
+    });
   });
 
   describe('settings option behavior', () => {

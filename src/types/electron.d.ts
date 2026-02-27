@@ -12,6 +12,15 @@ declare global {
         delete: (serverId: string) => Promise<any>;
         update: (serverId: string, config: any) => Promise<any>;
         ping: (serverId: string) => Promise<{ success: boolean; latency?: number; error?: string }>;
+        savePingResult: (serverId: string, payload: { latency?: number; error?: string }) => Promise<any>;
+        analyzeUris: (input: string, includePing?: boolean) => Promise<any>;
+        importUris: (input: string) => Promise<any>;
+      };
+      subscription: {
+        add: (payload: { name: string; url: string }) => Promise<any>;
+        list: () => Promise<any>;
+        refresh: (subscriptionId: string) => Promise<any>;
+        delete: (subscriptionId: string) => Promise<any>;
       };
       routing: {
         getApps: () => Promise<any>;

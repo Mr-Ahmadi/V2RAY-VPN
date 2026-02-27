@@ -58,6 +58,12 @@ export default function Settings() {
     publishedAt: string | null;
   } | null>(null);
   const [updateError, setUpdateError] = useState<string>('');
+  const sectionCardSx = {
+    background: 'linear-gradient(180deg, rgba(15, 23, 33, 0.96), rgba(16, 25, 35, 0.92))',
+    border: '1px solid var(--border-light)',
+    borderRadius: 2.5,
+    height: '100%',
+  };
 
   useEffect(() => {
     loadSettings();
@@ -170,20 +176,21 @@ export default function Settings() {
   }
 
   return (
-    <Box sx={{ py: { xs: 2, sm: 3 } }}>
+    <Box sx={{ py: 2 }}>
       <Container maxWidth="lg">
-        <Typography variant="h5" sx={{ fontWeight: 700, mb: 3 }}>
+        <Typography variant="h6" sx={{ fontWeight: 700, mb: 2, letterSpacing: 0.2 }}>
           Settings
         </Typography>
 
-        <Grid container spacing={2}>
+        <Grid container spacing={1.25}>
           <Grid item xs={12} md={6}>
-            <Card sx={{ backgroundColor: 'var(--bg-card)', height: '100%' }}>
-              <CardContent>
-            <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
+            <Card sx={sectionCardSx}>
+              <CardContent sx={{ p: '12px !important' }}>
+            <Typography variant="body2" sx={{ fontWeight: 700, mb: 1.25, px: 0.25, pt: 0.25 }}>
               Connection
             </Typography>
             <FormControlLabel
+              sx={{ my: 0.15, '& .MuiFormControlLabel-label': { fontSize: '0.84rem' } }}
               control={
                 <Switch
                   checked={settings.autoConnect || false}
@@ -193,6 +200,7 @@ export default function Settings() {
               label="Auto connect on startup"
             />
             <FormControlLabel
+              sx={{ my: 0.15, '& .MuiFormControlLabel-label': { fontSize: '0.84rem' } }}
               control={
                 <Switch
                   checked={settings.reconnectOnDisconnect || false}
@@ -202,6 +210,7 @@ export default function Settings() {
               label="Auto reconnect if disconnected"
             />
             <FormControlLabel
+              sx={{ my: 0.15, '& .MuiFormControlLabel-label': { fontSize: '0.84rem' } }}
               control={
                 <Switch
                   checked={settings.enablePingCalculation !== false}
@@ -223,15 +232,15 @@ export default function Settings() {
           </Grid>
 
           <Grid item xs={12} md={6}>
-            <Card sx={{ backgroundColor: 'var(--bg-card)', height: '100%' }}>
-              <CardContent>
-            <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
+            <Card sx={sectionCardSx}>
+              <CardContent sx={{ p: '12px !important' }}>
+            <Typography variant="body2" sx={{ fontWeight: 700, mb: 1.25, px: 0.25, pt: 0.25 }}>
               DNS Settings
             </Typography>
-            <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mb: 2 }}>
+            <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mb: 1 }}>
               DNS queries are routed through the VPN to prevent DNS leaks
             </Typography>
-            <FormControl fullWidth margin="normal">
+            <FormControl fullWidth margin="dense" size="small">
               <InputLabel>DNS Provider</InputLabel>
               <Select
                 value={settings.dnsProvider || 'cloudflare'}
@@ -250,19 +259,21 @@ export default function Settings() {
               <>
                 <TextField
                   fullWidth
+                  size="small"
                   label="Primary DNS"
                   placeholder="1.1.1.1"
                   value={settings.primaryDns || ''}
                   onChange={(e) => handleSettingChange('primaryDns', e.target.value)}
-                  margin="normal"
+                  margin="dense"
                 />
                 <TextField
                   fullWidth
+                  size="small"
                   label="Secondary DNS"
                   placeholder="8.8.8.8"
                   value={settings.secondaryDns || ''}
                   onChange={(e) => handleSettingChange('secondaryDns', e.target.value)}
-                  margin="normal"
+                  margin="dense"
                 />
               </>
             )}
@@ -275,7 +286,7 @@ export default function Settings() {
                 />
               }
               label="Block ads and trackers"
-              sx={{ mt: 2 }}
+              sx={{ mt: 1, '& .MuiFormControlLabel-label': { fontSize: '0.84rem' } }}
             />
             <Typography variant="caption" color="textSecondary">
               Uses V2Ray's built-in ad blocking rules
@@ -285,12 +296,13 @@ export default function Settings() {
           </Grid>
 
           <Grid item xs={12} md={6}>
-            <Card sx={{ backgroundColor: 'var(--bg-card)', height: '100%' }}>
-              <CardContent>
-            <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
+            <Card sx={sectionCardSx}>
+              <CardContent sx={{ p: '12px !important' }}>
+            <Typography variant="body2" sx={{ fontWeight: 700, mb: 1.25, px: 0.25, pt: 0.25 }}>
               Security
             </Typography>
             <FormControlLabel
+              sx={{ my: 0.15, '& .MuiFormControlLabel-label': { fontSize: '0.84rem' } }}
               control={
                 <Switch
                   checked={settings.killSwitch || false}
@@ -299,11 +311,12 @@ export default function Settings() {
               }
               label="Kill Switch (Block internet if VPN disconnects)"
             />
-            <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mb: 2 }}>
+            <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mb: 1 }}>
               Prevents data leaks by blocking all traffic when VPN is disconnected
             </Typography>
             
             <FormControlLabel
+              sx={{ my: 0.15, '& .MuiFormControlLabel-label': { fontSize: '0.84rem' } }}
               control={
                 <Switch
                   checked={settings.ipv6Disable || false}
@@ -320,12 +333,13 @@ export default function Settings() {
           </Grid>
 
           <Grid item xs={12} md={6}>
-            <Card sx={{ backgroundColor: 'var(--bg-card)', height: '100%' }}>
-              <CardContent>
-            <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
+            <Card sx={sectionCardSx}>
+              <CardContent sx={{ p: '12px !important' }}>
+            <Typography variant="body2" sx={{ fontWeight: 700, mb: 1.25, px: 0.25, pt: 0.25 }}>
               Network
             </Typography>
             <FormControlLabel
+              sx={{ my: 0.15, '& .MuiFormControlLabel-label': { fontSize: '0.84rem' } }}
               control={
                 <Switch
                   checked={settings.allowInsecure || false}
@@ -338,8 +352,8 @@ export default function Settings() {
               Not recommended for security reasons
             </Typography>
 
-            <Box sx={{ mt: 2 }}>
-              <FormControl fullWidth>
+            <Box sx={{ mt: 1 }}>
+              <FormControl fullWidth size="small">
                 <InputLabel>Connection Timeout (seconds)</InputLabel>
                 <Select
                   value={settings.connectionTimeout || 30}
@@ -353,8 +367,8 @@ export default function Settings() {
                 </Select>
               </FormControl>
 
-              <Box sx={{ mt: 2 }}>
-                <FormControl fullWidth>
+              <Box sx={{ mt: 1.25 }}>
+                <FormControl fullWidth size="small">
                   <InputLabel>Proxy Mode</InputLabel>
                   <Select
                     value={proxyMode}
@@ -372,7 +386,7 @@ export default function Settings() {
                 </FormControl>
               </Box>
 
-              <Box sx={{ mt: 2 }}>
+              <Box sx={{ mt: 1.25 }}>
                 <Typography variant="caption" sx={{ display: 'block', color: 'var(--text-secondary)' }}>
                   Effective routing strategy: <strong>{routingMode}</strong>
                 </Typography>
@@ -386,12 +400,13 @@ export default function Settings() {
           </Grid>
 
           <Grid item xs={12}>
-            <Card sx={{ backgroundColor: 'var(--bg-card)' }}>
-              <CardContent>
-            <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
+            <Card sx={sectionCardSx}>
+              <CardContent sx={{ p: '12px !important' }}>
+            <Typography variant="body2" sx={{ fontWeight: 700, mb: 1.25, px: 0.25, pt: 0.25 }}>
               Privacy
             </Typography>
             <FormControlLabel
+              sx={{ '& .MuiFormControlLabel-label': { fontSize: '0.84rem' } }}
               control={
                 <Switch
                   checked={settings.shareUsageData || false}
@@ -405,17 +420,17 @@ export default function Settings() {
           </Grid>
 
           <Grid item xs={12}>
-            <Card sx={{ backgroundColor: 'var(--bg-card)' }}>
-              <CardContent>
-                <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
+            <Card sx={sectionCardSx}>
+              <CardContent sx={{ p: '12px !important' }}>
+                <Typography variant="body2" sx={{ fontWeight: 700, mb: 1.25, px: 0.25, pt: 0.25 }}>
                   Builds & Updates
                 </Typography>
-                <Typography variant="caption" sx={{ color: 'var(--text-secondary)', display: 'block', mb: 2 }}>
+                <Typography variant="caption" sx={{ color: 'var(--text-secondary)', display: 'block', mb: 1.25 }}>
                   Check releases from GitHub and update from the latest published build.
                 </Typography>
 
-                <Box sx={{ mb: 1.5 }}>
-                  <Typography variant="body2">
+                <Box sx={{ mb: 1 }}>
+                  <Typography variant="caption">
                     App version: <strong>{appInfo?.version || '-'}</strong>
                   </Typography>
                   <Typography variant="caption" sx={{ color: 'var(--text-secondary)' }}>
@@ -423,10 +438,11 @@ export default function Settings() {
                   </Typography>
                 </Box>
 
-                <Grid container spacing={2}>
+                <Grid container spacing={1}>
                   <Grid item xs={12} md={6}>
                     <TextField
                       fullWidth
+                      size="small"
                       label="GitHub Owner"
                       value={settings.githubRepoOwner || ''}
                       onChange={(e) => handleSettingChange('githubRepoOwner', e.target.value)}
@@ -435,6 +451,7 @@ export default function Settings() {
                   <Grid item xs={12} md={6}>
                     <TextField
                       fullWidth
+                      size="small"
                       label="GitHub Repository"
                       value={settings.githubRepoName || ''}
                       onChange={(e) => handleSettingChange('githubRepoName', e.target.value)}
@@ -442,11 +459,11 @@ export default function Settings() {
                   </Grid>
                 </Grid>
 
-                <Box sx={{ display: 'flex', gap: 1.5, mt: 2, flexWrap: 'wrap' }}>
-                  <Button variant="outlined" onClick={handleCheckUpdates} disabled={checkingUpdates}>
+                <Box sx={{ display: 'flex', gap: 1, mt: 1.25, flexWrap: 'wrap' }}>
+                  <Button variant="outlined" size="small" sx={{ minHeight: 32 }} onClick={handleCheckUpdates} disabled={checkingUpdates}>
                     {checkingUpdates ? <CircularProgress size={18} /> : 'Check for Updates'}
                   </Button>
-                  <Button variant="contained" onClick={handleOpenGithubUpdate} disabled={downloadingUpdate}>
+                  <Button variant="contained" size="small" sx={{ minHeight: 32 }} onClick={handleOpenGithubUpdate} disabled={downloadingUpdate}>
                     {downloadingUpdate ? <CircularProgress size={18} /> : 'Update from GitHub'}
                   </Button>
                 </Box>
@@ -470,21 +487,23 @@ export default function Settings() {
           </Grid>
         </Grid>
 
-        <Box sx={{ display: 'flex', gap: 2, mt: 3, flexDirection: { xs: 'column', sm: 'row' } }}>
+        <Box sx={{ display: 'flex', gap: 1, mt: 2, flexDirection: { xs: 'column', sm: 'row' } }}>
           <Button
             variant="outlined"
+            size="small"
             onClick={loadSettings}
-            sx={{ flex: 1, minHeight: 44 }}
+            sx={{ flex: 1, minHeight: 34 }}
           >
             Reset
           </Button>
           <Button
             variant="contained"
+            size="small"
             onClick={handleSaveSettings}
             disabled={saving}
             sx={{
               flex: 1,
-              minHeight: 44,
+              minHeight: 34,
               background: 'linear-gradient(90deg, var(--primary), var(--accent))',
             }}
           >

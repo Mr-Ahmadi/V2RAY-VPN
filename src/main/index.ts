@@ -7,6 +7,9 @@ import { initializeDatabase, saveMemoryStorage } from '../db/database';
 import { V2RayService } from '../services/v2ray';
 import { AppRoutingService } from '../services/appRouting';
 import debugLogger from '../services/debugLogger';
+import { ServerManager } from '../services/serverManager';
+import { UriImportService } from '../services/import/UriImportService';
+import { SubscriptionManager } from '../services/subscriptionManager';
 
 // Handle EPIPE errors (when stdout/stderr pipe closes)
 // This prevents the application from crashing if the console output pipe is broken
@@ -195,6 +198,8 @@ console.log('[Main] Electron version:', process.versions.electron);
 let mainWindow: BrowserWindow | null = null;
 let v2rayService: V2RayService;
 let appRoutingService: AppRoutingService;
+let subscriptionManager: SubscriptionManager;
+let uriImportService: UriImportService;
 
 const triggerAutoConnectIfEnabled = async () => {
   if (!v2rayService) return;
@@ -411,6 +416,11 @@ app.on('ready', async () => {
     console.log('[Main] Initializing AppRoutingService...');
     appRoutingService = new AppRoutingService();
     console.log('[Main] AppRoutingService initialized successfully');
+
+    console.log('[Main] Initializing import/subscription services...');
+    uriImportService = new UriImportService(new ServerManager());
+    subscriptionManager = new SubscriptionManager();
+    console.log('[Main] Import/subscription services initialized successfully');
 
     // Setup IPC handlers BEFORE creating window
     setupIPCHandlers();
@@ -785,6 +795,148 @@ const setupIPCHandlers = () => {
     }
   });
 
+  ipcMain.handle('server:savePingResult', async (_: any, serverId: string, payload: { latency?: number; error?: string }) => {
+    try {
+      const manager = new ServerManager();
+      await manager.savePingResult(serverId, payload || {});
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('server:importUris', async (_: any, input: string) => {
+    try {
+      if (!uriImportService) throw new Error('URI import service not initialized');
+      const result = await uriImportService.importUris(input);
+      return {
+        success: true,
+        data: {
+          importedCount: result.imported.length,
+          skippedCount: result.skipped.length,
+          errorCount: result.errors.length,
+          imported: result.imported,
+          skipped: result.skipped,
+          errors: result.errors,
+        },
+      };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('server:analyzeUris', async (_: any, input: string, includePing: boolean = false) => {
+    try {
+      if (!uriImportService) throw new Error('URI import service not initialized');
+      if (!v2rayService) throw new Error('V2Ray service not initialized');
+
+      const items = uriImportService.previewUris(input);
+      const runWithConcurrency = async <T, R>(
+        source: T[],
+        concurrency: number,
+        worker: (item: T, index: number) => Promise<R>
+      ): Promise<R[]> => {
+        const safeConcurrency = Math.max(1, Math.min(concurrency, source.length || 1));
+        const results: R[] = new Array(source.length);
+        let cursor = 0;
+
+        const workers = Array.from({ length: safeConcurrency }, async () => {
+          while (true) {
+            const currentIndex = cursor;
+            cursor += 1;
+            if (currentIndex >= source.length) {
+              return;
+            }
+            results[currentIndex] = await worker(source[currentIndex], currentIndex);
+          }
+        });
+
+        await Promise.all(workers);
+        return results;
+      };
+
+      const analyzed = await runWithConcurrency(items, includePing ? 4 : 12, async (item) => {
+        if (!item.parsed) {
+          return {
+            uri: item.uri,
+            error: item.error || 'Failed to parse URI',
+          };
+        }
+
+        let ping: { success: boolean; latency?: number; error?: string } | null = null;
+        if (includePing) {
+          ping = await v2rayService.testServerInputRealDelay({
+            name: item.parsed.name,
+            protocol: item.parsed.protocol,
+            address: item.parsed.address,
+            port: item.parsed.port,
+            config: item.parsed.config,
+            remarks: item.parsed.remarks,
+          });
+        }
+
+        return {
+          uri: item.uri,
+          protocol: item.parsed.protocol,
+          name: item.parsed.name,
+          address: item.parsed.address,
+          port: item.parsed.port,
+          ping,
+        };
+      });
+
+      return {
+        success: true,
+        data: {
+          total: analyzed.length,
+          results: analyzed,
+        },
+      };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('subscription:add', async (_: any, payload: { name: string; url: string }) => {
+    try {
+      if (!subscriptionManager) throw new Error('Subscription manager not initialized');
+      const result = await subscriptionManager.addSubscription(payload);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('subscription:list', async () => {
+    try {
+      if (!subscriptionManager) throw new Error('Subscription manager not initialized');
+      const subscriptions = await subscriptionManager.listSubscriptions();
+      return { success: true, data: subscriptions };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('subscription:refresh', async (_: any, subscriptionId: string) => {
+    try {
+      if (!subscriptionManager) throw new Error('Subscription manager not initialized');
+      const result = await subscriptionManager.refreshSubscription(subscriptionId);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('subscription:delete', async (_: any, subscriptionId: string) => {
+    try {
+      if (!subscriptionManager) throw new Error('Subscription manager not initialized');
+      await subscriptionManager.deleteSubscription(subscriptionId);
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
   // App routing handlers
   ipcMain.handle('routing:getApps', async () => {
     try {
@@ -918,8 +1070,26 @@ const setupIPCHandlers = () => {
   ipcMain.handle('settings:save', async (_: any, settings: any) => {
     try {
       if (!v2rayService) throw new Error('V2Ray service not initialized');
+      const previousSettings = await v2rayService.getSettings();
       await v2rayService.saveSettings(settings);
-      return { success: true };
+
+      const dnsRelatedKeys = ['dnsProvider', 'primaryDns', 'secondaryDns', 'ipv6Disable'];
+      const dnsSettingsChanged = dnsRelatedKeys.some((key) => {
+        const before = previousSettings?.[key];
+        const after = settings?.[key];
+        return JSON.stringify(before ?? null) !== JSON.stringify(after ?? null);
+      });
+
+      const status = v2rayService.getStatus();
+      const currentServerId = status.currentServer?.id;
+
+      if (dnsSettingsChanged && status.connected && currentServerId) {
+        console.log('[Main] DNS settings changed while connected; reloading active connection to apply DNS');
+        await v2rayService.connect(currentServerId);
+        return { success: true, data: { reappliedConnection: true } };
+      }
+
+      return { success: true, data: { reappliedConnection: false } };
     } catch (error: any) {
       return { success: false, error: error.message };
     }

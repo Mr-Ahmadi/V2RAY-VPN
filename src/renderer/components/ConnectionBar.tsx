@@ -53,8 +53,8 @@ export default function ConnectionBar() {
   return (
     <Box
       sx={{
-        py: 1.5,
-        px: 3,
+        py: 0.75,
+        px: { xs: 1, sm: 1.5 },
         backgroundColor: isError ? 'rgba(239, 68, 68, 0.1)' : 'rgba(34, 197, 94, 0.08)',
         backdropFilter: 'blur(10px)',
         borderBottom: '1px solid',
@@ -69,18 +69,18 @@ export default function ConnectionBar() {
         }
       }}
     >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 3, flexWrap: 'wrap', flex: 1 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap', flex: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           {/* Status Icon/Animation */}
           {(isConnecting || isDisconnecting) ? (
-            <CircularProgress size={20} sx={{ color: 'var(--primary)' }} />
+            <CircularProgress size={16} sx={{ color: 'var(--primary)' }} />
           ) : isError ? (
             <ErrorIcon sx={{ color: 'var(--error)' }} />
           ) : (
             <Box
               sx={{
-                width: 10,
-                height: 10,
+                width: 8,
+                height: 8,
                 borderRadius: '50%',
                 backgroundColor: 'var(--success)',
                 boxShadow: '0 0 10px rgba(34, 197, 94, 0.7)',
@@ -94,7 +94,7 @@ export default function ConnectionBar() {
             />
           )}
 
-          <Typography variant="body2" sx={{ fontWeight: 600, color: isError ? 'var(--error)' : 'var(--success)' }}>
+          <Typography variant="caption" sx={{ fontWeight: 600, color: isError ? 'var(--error)' : 'var(--success)' }}>
             {isConnecting ? 'Authentication...' :
               isDisconnecting ? 'Disconnecting...' :
                 isError ? 'Connection Failed' :
@@ -103,11 +103,11 @@ export default function ConnectionBar() {
         </Box>
 
         {status.state === 'connected' && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2.5, animation: 'fadeIn 0.5s ease-in', '@keyframes fadeIn': { from: { opacity: 0 }, to: { opacity: 1 } } }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, animation: 'fadeIn 0.5s ease-in', '@keyframes fadeIn': { from: { opacity: 0 }, to: { opacity: 1 } } }}>
             <Tooltip title="Upload Speed">
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                <UpIcon sx={{ fontSize: 16, color: 'var(--accent)' }} />
-                <Typography variant="caption" sx={{ color: 'var(--text-strong)', fontWeight: 500, minWidth: '45px' }}>
+                <UpIcon sx={{ fontSize: 14, color: 'var(--accent)' }} />
+                <Typography variant="caption" sx={{ color: 'var(--text-strong)', fontWeight: 500, minWidth: '42px', fontSize: '0.68rem' }}>
                   {status.uploadSpeed != null ? status.uploadSpeed.toFixed(2) : '0.00'} <span style={{ color: 'var(--text-secondary)' }}>Mb/s</span>
                 </Typography>
               </Box>
@@ -115,8 +115,8 @@ export default function ConnectionBar() {
 
             <Tooltip title="Download Speed">
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                <DownIcon sx={{ fontSize: 16, color: 'var(--secondary)' }} />
-                <Typography variant="caption" sx={{ color: 'var(--text-strong)', fontWeight: 500, minWidth: '45px' }}>
+                <DownIcon sx={{ fontSize: 14, color: 'var(--secondary)' }} />
+                <Typography variant="caption" sx={{ color: 'var(--text-strong)', fontWeight: 500, minWidth: '42px', fontSize: '0.68rem' }}>
                   {status.downloadSpeed != null ? status.downloadSpeed.toFixed(2) : '0.00'} <span style={{ color: 'var(--text-secondary)' }}>Mb/s</span>
                 </Typography>
               </Box>
@@ -126,12 +126,13 @@ export default function ConnectionBar() {
               <Tooltip title="Latency">
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                   <PingIcon sx={{
-                    fontSize: 16,
+                    fontSize: 14,
                     color: status.ping < 300 ? 'var(--success)' : (status.ping < 800 ? 'var(--secondary)' : 'var(--error)')
                   }} />
                   <Typography variant="caption" sx={{
                     color: status.ping < 300 ? 'var(--success)' : (status.ping < 800 ? 'var(--secondary)' : 'var(--error)'),
-                    fontWeight: 600
+                    fontWeight: 600,
+                    fontSize: '0.68rem',
                   }}>
                     {status.ping >= 0 ? `${status.ping} ms` : 'N/A'}
                   </Typography>
@@ -159,7 +160,9 @@ export default function ConnectionBar() {
           sx={{
             borderRadius: 2,
             textTransform: 'none',
-            px: 2,
+            px: 1.5,
+            minHeight: 28,
+            fontSize: '0.72rem',
             boxShadow: 'none',
             '&:hover': { boxShadow: '0 4px 12px rgba(239, 68, 68, 0.2)' }
           }}

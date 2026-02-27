@@ -9,6 +9,10 @@ export interface Server {
   port: number;
   config: Record<string, any>;
   remarks?: string;
+  subscriptionId?: string | null;
+  pingLatency?: number | null;
+  pingError?: string | null;
+  pingUpdatedAt?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -34,9 +38,23 @@ export class ServerManager {
     console.log('[ServerManager] Adding server:', { id, name: server.name, protocol: server.protocol, address: server.address });
 
     await runAsync(
-      `INSERT INTO servers (id, name, protocol, address, port, config, remarks, createdAt, updatedAt)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, server.name, server.protocol, server.address, server.port, JSON.stringify(server.config), server.remarks, now, now]
+      `INSERT INTO servers (id, name, protocol, address, port, config, remarks, subscriptionId, pingLatency, pingError, pingUpdatedAt, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        server.name,
+        server.protocol,
+        server.address,
+        server.port,
+        JSON.stringify(server.config),
+        server.remarks,
+        server.subscriptionId || null,
+        server.pingLatency ?? null,
+        server.pingError ?? null,
+        server.pingUpdatedAt ?? null,
+        now,
+        now,
+      ]
     );
 
     console.log('[ServerManager] Server added successfully:', id);
@@ -87,9 +105,22 @@ export class ServerManager {
     const updated = { ...server, ...updates };
 
     await runAsync(
-      `UPDATE servers SET name = ?, protocol = ?, address = ?, port = ?, config = ?, remarks = ?, updatedAt = ?
+      `UPDATE servers SET name = ?, protocol = ?, address = ?, port = ?, config = ?, remarks = ?, subscriptionId = ?, pingLatency = ?, pingError = ?, pingUpdatedAt = ?, updatedAt = ?
        WHERE id = ?`,
-      [updated.name, updated.protocol, updated.address, updated.port, JSON.stringify(updated.config), updated.remarks, now, id]
+      [
+        updated.name,
+        updated.protocol,
+        updated.address,
+        updated.port,
+        JSON.stringify(updated.config),
+        updated.remarks,
+        updated.subscriptionId || null,
+        updated.pingLatency ?? null,
+        updated.pingError ?? null,
+        updated.pingUpdatedAt ?? null,
+        now,
+        id,
+      ]
     );
 
     console.log('[ServerManager] Server updated successfully:', id);
@@ -101,6 +132,20 @@ export class ServerManager {
     console.log('[ServerManager] Deleting server:', id);
     await runAsync('DELETE FROM servers WHERE id = ?', [id]);
     console.log('[ServerManager] Server deleted successfully:', id);
+  }
+
+  async savePingResult(serverId: string, result: { latency?: number; error?: string }): Promise<void> {
+    const now = new Date().toISOString();
+    await runAsync(
+      `UPDATE servers SET pingLatency = ?, pingError = ?, pingUpdatedAt = ?, updatedAt = ? WHERE id = ?`,
+      [
+        typeof result.latency === 'number' ? result.latency : null,
+        result.error || null,
+        now,
+        now,
+        serverId,
+      ]
+    );
   }
 
 }

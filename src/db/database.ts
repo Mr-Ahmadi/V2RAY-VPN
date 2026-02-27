@@ -6,6 +6,7 @@ import os from 'os';
 // In-memory fallback storage when SQLite isn't available
 const memoryStorage: Record<string, any[]> = {
   servers: [],
+  subscriptions: [],
   app_routing: [],
   settings: [],
   connection_logs: [],
@@ -137,6 +138,23 @@ export const initializeDatabase = async () => {
         port INTEGER NOT NULL,
         config TEXT NOT NULL,
         remarks TEXT,
+        subscriptionId TEXT,
+        pingLatency INTEGER,
+        pingError TEXT,
+        pingUpdatedAt TIMESTAMP,
+        createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS subscriptions (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        url TEXT NOT NULL,
+        enabled BOOLEAN DEFAULT TRUE,
+        lastUpdatedAt TIMESTAMP,
+        lastError TEXT,
         createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )

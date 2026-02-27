@@ -25,7 +25,7 @@ const theme = createTheme({
     },
   },
   typography: {
-    fontFamily: '"Sora", "Segoe UI", sans-serif',
+    fontFamily: '"Inter Local", "Segoe UI", "Helvetica Neue", Arial, sans-serif',
     button: {
       textTransform: 'none',
       fontWeight: 600,

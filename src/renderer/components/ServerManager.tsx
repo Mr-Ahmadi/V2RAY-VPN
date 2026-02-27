@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Box,
   Container,
@@ -20,6 +20,9 @@ import {
   Grid,
   CircularProgress,
   Alert,
+  Menu,
+  ListItemIcon,
+  ListItemText,
 } from '@mui/material';
 import {
   Delete as DeleteIcon,
@@ -31,6 +34,8 @@ import {
   VpnKey as ConnectIcon,
   CallEnd as DisconnectIcon,
   Speed as SpeedIcon,
+  Sync as SyncIcon,
+  MoreVert as MoreVertIcon,
 } from '@mui/icons-material';
 
 interface Server {
@@ -41,6 +46,19 @@ interface Server {
   port: number;
   config: Record<string, any>;
   remarks?: string;
+  subscriptionId?: string | null;
+  pingLatency?: number | null;
+  pingError?: string | null;
+  pingUpdatedAt?: string | null;
+}
+
+interface Subscription {
+  id: string;
+  name: string;
+  url: string;
+  enabled: boolean;
+  lastUpdatedAt?: string | null;
+  lastError?: string | null;
 }
 
 interface ConnectionStatus {
@@ -54,18 +72,39 @@ export default function ServerManager() {
   const [loading, setLoading] = useState(true);
   const [openDialog, setOpenDialog] = useState(false);
   const [openUriDialog, setOpenUriDialog] = useState(false);
+  const [openSubscriptionDialog, setOpenSubscriptionDialog] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [uriInput, setUriInput] = useState('');
   const [uriError, setUriError] = useState('');
+  const [uriMessage, setUriMessage] = useState('');
   const [uriLoading, setUriLoading] = useState(false);
+  const [uriAnalysisLoading, setUriAnalysisLoading] = useState(false);
+  const [uriAnalysisResults, setUriAnalysisResults] = useState<Array<{
+    uri: string;
+    protocol?: string;
+    name?: string;
+    address?: string;
+    port?: number;
+    error?: string;
+    ping?: { success: boolean; latency?: number; error?: string } | null;
+  }>>([]);
+  const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
+  const [subscriptionLoadingId, setSubscriptionLoadingId] = useState<string | null>(null);
+  const [subscriptionMessage, setSubscriptionMessage] = useState('');
+  const [subscriptionError, setSubscriptionError] = useState('');
+  const [subscriptionForm, setSubscriptionForm] = useState({ name: '', url: '' });
+  const [subscriptionFormError, setSubscriptionFormError] = useState('');
+  const [subscriptionFormLoading, setSubscriptionFormLoading] = useState(false);
   const [formError, setFormError] = useState('');
   const [saveLoading, setSaveLoading] = useState(false);
   const [connectingId, setConnectingId] = useState<string | null>(null);
   const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
   const [connectError, setConnectError] = useState('');
   const [pingResults, setPingResults] = useState<Record<string, { latency?: number; error?: string }>>({});
-  const [pingingId, setPingingId] = useState<string | null>(null);
+  const [pingingServerIds, setPingingServerIds] = useState<Record<string, boolean>>({});
+  const [pingAllLoading, setPingAllLoading] = useState(false);
+  const [actionsAnchorEl, setActionsAnchorEl] = useState<null | HTMLElement>(null);
   const [formData, setFormData] = useState({
     name: '',
     protocol: 'vless' as 'vless' | 'vmess' | 'trojan' | 'shadowsocks',
@@ -81,6 +120,7 @@ export default function ServerManager() {
 
   useEffect(() => {
     loadServers();
+    loadSubscriptions();
   }, []);
 
   useEffect(() => {
@@ -102,12 +142,33 @@ export default function ServerManager() {
       setLoading(true);
       const result = await window.electronAPI.server.list();
       if (result.success) {
-        setServers(result.data);
+        const nextServers: Server[] = result.data || [];
+        setServers(nextServers);
+        const nextPingResults = nextServers.reduce((acc, server) => {
+          if (typeof server.pingLatency === 'number') {
+            acc[server.id] = { latency: server.pingLatency };
+          } else if (server.pingError) {
+            acc[server.id] = { error: server.pingError };
+          }
+          return acc;
+        }, {} as Record<string, { latency?: number; error?: string }>);
+        setPingResults(nextPingResults);
       }
     } catch (error) {
       console.error('Error loading servers:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadSubscriptions = async () => {
+    try {
+      const result = await window.electronAPI.subscription.list();
+      if (result.success) {
+        setSubscriptions(result.data || []);
+      }
+    } catch (error) {
+      console.error('Error loading subscriptions:', error);
     }
   };
 
@@ -154,201 +215,156 @@ export default function ServerManager() {
     setOpenUriDialog(false);
     setUriInput('');
     setUriError('');
+    setUriMessage('');
+    setUriAnalysisResults([]);
   };
 
-  const parseUri = (uri: string): Partial<Server> | null => {
+  const handleAnalyzeUris = async () => {
     try {
-      // Handle vless:// and vmess:// URIs
-      if (uri.startsWith('vless://')) {
-        return parseVlessUri(uri);
-      } else if (uri.startsWith('vmess://')) {
-        return parseVmessUri(uri);
-      } else if (uri.startsWith('trojan://')) {
-        return parseTrojanUri(uri);
-      } else if (uri.startsWith('ss://')) {
-        return parseShadowsocksUri(uri);
+      setUriError('');
+      setUriMessage('');
+      setUriAnalysisLoading(true);
+      const analyzeUrisFn = (window.electronAPI?.server as any)?.analyzeUris;
+      if (typeof analyzeUrisFn !== 'function') {
+        setUriError('Analyze URI API is unavailable in the current app process. Restart the app to load the latest preload bridge.');
+        return;
       }
-      return null;
+      const result = await analyzeUrisFn(uriInput, true);
+      if (!result.success) {
+        setUriError(result.error || 'Failed to analyze URIs');
+        return;
+      }
+      const items = result.data?.results || [];
+      setUriAnalysisResults(items);
+      setUriMessage(`Analyzed ${items.length} URI(s).`);
     } catch (error) {
-      console.error('Error parsing URI:', error);
-      return null;
+      setUriError(error instanceof Error ? error.message : 'Failed to analyze URIs');
+    } finally {
+      setUriAnalysisLoading(false);
     }
-  };
-
-  const parseVlessUri = (uri: string): Partial<Server> => {
-    // vless://uuid@address:port?query#remarks
-    try {
-      // Split URI into main parts and fragment (remarks)
-      const [mainUri, fragment] = uri.split('#');
-      
-      // Match the main structure: vless://uuid@address:port?querystring
-      const match = mainUri.match(/vless:\/\/([^@]+)@([^:/?]+):(\d+)(.*)$/);
-      if (!match) {
-        console.error('VLESS URI regex failed for:', uri);
-        throw new Error('Invalid VLESS URI format');
-      }
-
-      const [, id, address, port, queryPart] = match;
-      
-      // Parse query parameters - handle both ? and # separators
-      let params = new URLSearchParams();
-      if (queryPart) {
-        // Remove leading ? if present
-        const queryString = queryPart.startsWith('?') ? queryPart.substring(1) : queryPart;
-        params = new URLSearchParams(queryString);
-      }
-
-      // Decode fragment if it exists (remarks are often in the fragment)
-      let remarks = '';
-      if (fragment) {
-        try {
-          remarks = decodeURIComponent(fragment);
-        } catch (e) {
-          remarks = fragment;
-        }
-      }
-
-      const name = params.get('remarks') || remarks || address;
-
-      console.log('Parsed VLESS URI:', { id, address, port: parseInt(port), name });
-
-      return {
-        protocol: 'vless',
-        address,
-        port: parseInt(port),
-        config: { 
-          id, 
-          encryption: params.get('encryption') || 'none',
-          // Store other relevant parameters
-          hiddify: params.get('hiddify'),
-          sni: params.get('sni'),
-          type: params.get('type'),
-          alpn: params.get('alpn'),
-          path: params.get('path'),
-          host: params.get('host'),
-          serviceName: params.get('serviceName'),
-          mode: params.get('mode'),
-          fp: params.get('fp'),
-          headerType: params.get('headerType'),
-          security: params.get('security'),
-          allowInsecure: params.get('allowInsecure'),
-          insecure: params.get('insecure'),
-        },
-        name: name,
-        remarks: remarks,
-      };
-    } catch (error) {
-      console.error('Error parsing VLESS URI:', uri, error);
-      throw error;
-    }
-  };
-
-  const parseVmessUri = (uri: string): Partial<Server> => {
-    // vmess://base64encoded
-    const encoded = uri.replace('vmess://', '');
-    const decoded = Buffer.from(encoded, 'base64').toString('utf-8');
-    const config = JSON.parse(decoded);
-
-    return {
-      protocol: 'vmess',
-      address: config.add || config.address,
-      port: config.port || 443,
-      config: {
-        id: config.id,
-        alterId: config.aid ?? config.alterId ?? 0,
-        security: config.scy || config.security || 'auto',
-        type: config.net || 'tcp',
-        path: config.path || '',
-        host: config.host || config.sni || '',
-        sni: config.sni || config.host || '',
-        tls: config.tls === 'tls' ? 'tls' : 'none',
-        allowInsecure: config.allowInsecure === true || config.allowInsecure === 'true',
-      },
-      name: config.ps || config.name || config.add,
-      remarks: config.ps || '',
-    };
-  };
-
-  const parseTrojanUri = (uri: string): Partial<Server> => {
-    // trojan://password@address:port?remarks=name&sni=...
-    const match = uri.match(/trojan:\/\/([^@]+)@([^:]+):(\d+)(.*)$/);
-    if (!match) throw new Error('Invalid Trojan URI format');
-
-    const [, password, address, port, queryString] = match;
-    const params = new URLSearchParams(queryString.split('?')[1] || '');
-    const sni = params.get('sni') || params.get('peer') || '';
-
-    return {
-      protocol: 'trojan',
-      address,
-      port: parseInt(port),
-      config: {
-        password,
-        sni: sni || address,
-        allowInsecure: params.get('allowInsecure') === '1' || params.get('allowInsecure') === 'true',
-      },
-      name: params.get('remarks') ? decodeURIComponent(params.get('remarks')!) : address,
-      remarks: params.get('remarks') ? decodeURIComponent(params.get('remarks')!) : '',
-    };
-  };
-
-  const parseShadowsocksUri = (uri: string): Partial<Server> => {
-    // ss://method:password@address:port#remarks
-    const [schemeContent, remarks] = uri.split('#');
-    const match = schemeContent.match(/ss:\/\/([^:]+):([^@]+)@([^:]+):(\d+)/);
-    if (!match) throw new Error('Invalid Shadowsocks URI format');
-
-    const [, method, password, address, port] = match;
-
-    return {
-      protocol: 'shadowsocks',
-      address,
-      port: parseInt(port),
-      config: { password, method },
-      name: remarks ? decodeURIComponent(remarks) : address,
-      remarks: remarks ? decodeURIComponent(remarks) : '',
-    };
   };
 
   const handleImportUri = async () => {
     try {
       setUriError('');
+      setUriMessage('');
       setUriLoading(true);
-
-      console.log('Attempting to parse URI:', uriInput.trim().substring(0, 50) + '...');
-      
-      const parsed = parseUri(uriInput.trim());
-      if (!parsed) {
-        setUriError('Invalid URI format. Supported: vless://, vmess://, trojan://, ss://');
-        console.error('URI parsing returned null');
+      const result = await window.electronAPI.server.importUris(uriInput);
+      if (!result.success) {
+        setUriError(result.error || 'Failed to import URIs');
         return;
       }
 
-      console.log('Successfully parsed URI:', { protocol: parsed.protocol, address: parsed.address, port: parsed.port, name: parsed.name });
+      const { importedCount, skippedCount, errorCount } = result.data || {};
+      setUriMessage(`Imported ${importedCount || 0}, skipped ${skippedCount || 0}, errors ${errorCount || 0}.`);
 
-      // Auto-fill the form with parsed data
-      setFormData({
-        name: parsed.name || '',
-        protocol: (parsed.protocol || 'vless') as any,
-        address: parsed.address || '',
-        port: parsed.port || 443,
-        remarks: parsed.remarks || '',
-        id: parsed.config?.id || '',
-        password: parsed.config?.password || '',
-        encryption: parsed.config?.encryption || 'none',
-        method: parsed.config?.method || 'aes-256-gcm',
-        fullConfig: parsed.config || {}, // Preserve the entire config from parsing
-      });
-
-      setOpenUriDialog(false);
-      setUriInput('');
-      setOpenDialog(true);
+      if ((importedCount || 0) > 0) {
+        await loadServers();
+      }
+      if ((errorCount || 0) === 0) {
+        setOpenUriDialog(false);
+        setUriInput('');
+      }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-      console.error('Error in handleImportUri:', errorMsg, error);
       setUriError(`Error: ${errorMsg}`);
     } finally {
       setUriLoading(false);
+    }
+  };
+
+  const handleOpenSubscriptionDialog = () => {
+    setSubscriptionForm({ name: '', url: '' });
+    setSubscriptionFormError('');
+    setOpenSubscriptionDialog(true);
+  };
+
+  const handleCloseSubscriptionDialog = () => {
+    setOpenSubscriptionDialog(false);
+    setSubscriptionFormError('');
+    setSubscriptionFormLoading(false);
+  };
+
+  const handleAddSubscription = async () => {
+    try {
+      setSubscriptionFormError('');
+      setSubscriptionFormLoading(true);
+      setSubscriptionMessage('');
+      setSubscriptionError('');
+
+      if (!subscriptionForm.name.trim()) {
+        setSubscriptionFormError('Subscription name is required');
+        return;
+      }
+      if (!subscriptionForm.url.trim()) {
+        setSubscriptionFormError('Subscription URL is required');
+        return;
+      }
+
+      const result = await window.electronAPI.subscription.add({
+        name: subscriptionForm.name.trim(),
+        url: subscriptionForm.url.trim(),
+      });
+
+      if (!result.success) {
+        setSubscriptionFormError(result.error || 'Failed to add subscription');
+        return;
+      }
+
+      const summary = result.data || {};
+      setSubscriptionMessage(
+        `Subscription added. Imported ${summary.importedCount || 0}, skipped ${summary.skippedCount || 0}, errors ${summary.errorCount || 0}.`
+      );
+      await loadSubscriptions();
+      await loadServers();
+      handleCloseSubscriptionDialog();
+    } catch (error) {
+      setSubscriptionFormError(error instanceof Error ? error.message : 'Failed to add subscription');
+    } finally {
+      setSubscriptionFormLoading(false);
+    }
+  };
+
+  const handleRefreshSubscription = async (subscriptionId: string) => {
+    try {
+      setSubscriptionLoadingId(subscriptionId);
+      setSubscriptionMessage('');
+      setSubscriptionError('');
+      const result = await window.electronAPI.subscription.refresh(subscriptionId);
+      if (!result.success) {
+        setSubscriptionError(result.error || 'Failed to refresh subscription');
+        return;
+      }
+      const summary = result.data || {};
+      setSubscriptionMessage(
+        `Subscription refreshed. Imported ${summary.importedCount || 0}, skipped ${summary.skippedCount || 0}, errors ${summary.errorCount || 0}.`
+      );
+      await loadSubscriptions();
+      await loadServers();
+    } catch (error) {
+      setSubscriptionError(error instanceof Error ? error.message : 'Failed to refresh subscription');
+    } finally {
+      setSubscriptionLoadingId(null);
+    }
+  };
+
+  const handleDeleteSubscription = async (subscriptionId: string) => {
+    try {
+      setSubscriptionLoadingId(subscriptionId);
+      setSubscriptionMessage('');
+      setSubscriptionError('');
+      const result = await window.electronAPI.subscription.delete(subscriptionId);
+      if (!result.success) {
+        setSubscriptionError(result.error || 'Failed to delete subscription');
+        return;
+      }
+      setSubscriptionMessage('Subscription deleted.');
+      await loadSubscriptions();
+      await loadServers();
+    } catch (error) {
+      setSubscriptionError(error instanceof Error ? error.message : 'Failed to delete subscription');
+    } finally {
+      setSubscriptionLoadingId(null);
     }
   };
 
@@ -449,25 +465,106 @@ export default function ServerManager() {
     }
   };
 
+  const persistPingResult = async (serverId: string, payload: { latency?: number; error?: string }) => {
+    try {
+      await window.electronAPI.server.savePingResult(serverId, payload);
+    } catch (error) {
+      console.error('Failed to persist ping result:', error);
+    }
+  };
+
   const handlePing = async (serverId: string) => {
     try {
-      setPingingId(serverId);
-      setPingResults(prev => ({ ...prev, [serverId]: {} }));
+      setPingingServerIds((prev) => ({ ...prev, [serverId]: true }));
       const result = await window.electronAPI.server.ping(serverId);
-      setPingResults(prev => ({
-        ...prev,
-        [serverId]: result.success
-          ? { latency: result.latency }
-          : { error: result.error || 'Failed' },
-      }));
+      const pingData = result.success
+        ? { latency: result.latency }
+        : { error: result.error || 'Failed' };
+      setPingResults(prev => ({ ...prev, [serverId]: pingData }));
+      await persistPingResult(serverId, pingData);
     } catch (error) {
-      setPingResults(prev => ({
-        ...prev,
-        [serverId]: { error: error instanceof Error ? error.message : 'Failed' },
-      }));
+      const pingData = { error: error instanceof Error ? error.message : 'Failed' };
+      setPingResults(prev => ({ ...prev, [serverId]: pingData }));
+      await persistPingResult(serverId, pingData);
     } finally {
-      setPingingId(null);
+      setPingingServerIds((prev) => {
+        const next = { ...prev };
+        delete next[serverId];
+        return next;
+      });
     }
+  };
+
+  const handlePingAll = async () => {
+    try {
+      if (servers.length === 0) return;
+      setPingAllLoading(true);
+      const serverIds = servers.map((server) => server.id);
+
+      setPingingServerIds(
+        serverIds.reduce((acc, id) => {
+          acc[id] = true;
+          return acc;
+        }, {} as Record<string, boolean>)
+      );
+
+      await Promise.allSettled(
+        servers.map(async (server) => {
+          try {
+            const result = await window.electronAPI.server.ping(server.id);
+            const pingData = result.success
+              ? { latency: result.latency }
+              : { error: result.error || 'Failed' };
+            setPingResults((prev) => ({ ...prev, [server.id]: pingData }));
+            await persistPingResult(server.id, pingData);
+          } catch (error) {
+            const pingData = { error: error instanceof Error ? error.message : 'Failed' };
+            setPingResults((prev) => ({ ...prev, [server.id]: pingData }));
+            await persistPingResult(server.id, pingData);
+          } finally {
+            setPingingServerIds((prev) => {
+              const next = { ...prev };
+              delete next[server.id];
+              return next;
+            });
+          }
+        })
+      );
+    } finally {
+      setPingingServerIds({});
+      setPingAllLoading(false);
+    }
+  };
+
+  const sortedServers = useMemo(() => {
+    const order = new Map<string, number>();
+    servers.forEach((server, index) => order.set(server.id, index));
+
+    return [...servers].sort((a, b) => {
+      const aLatency = pingResults[a.id]?.latency;
+      const bLatency = pingResults[b.id]?.latency;
+      const aHasLatency = typeof aLatency === 'number';
+      const bHasLatency = typeof bLatency === 'number';
+
+      if (aHasLatency && bHasLatency) {
+        if (aLatency! !== bLatency!) {
+          return aLatency! - bLatency!;
+        }
+        return a.name.localeCompare(b.name);
+      }
+      if (aHasLatency) return -1;
+      if (bHasLatency) return 1;
+
+      return (order.get(a.id) || 0) - (order.get(b.id) || 0);
+    });
+  }, [servers, pingResults]);
+
+  const handleOpenActionsMenu = (event: React.MouseEvent<HTMLElement>) => {
+    setActionsAnchorEl(event.currentTarget);
+  };
+
+  const handleCloseActionsMenu = () => {
+    setActionsAnchorEl(null);
   };
 
   const handleConnect = async (serverId: string) => {
@@ -513,7 +610,7 @@ export default function ServerManager() {
   }
 
   return (
-    <Box sx={{ py: 3 }}>
+    <Box sx={{ py: 2 }}>
       <Container maxWidth="lg">
         {connectError && (
           <Alert severity="error" sx={{ mb: 2 }} onClose={() => setConnectError('')}>
@@ -522,105 +619,220 @@ export default function ServerManager() {
               : connectError}
           </Alert>
         )}
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3, gap: 1.5, flexWrap: 'wrap' }}>
-          <Typography variant="h5" sx={{ fontWeight: 600 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2, gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+          <Typography variant="h6" sx={{ fontWeight: 700, letterSpacing: 0.2 }}>
             Servers
           </Typography>
-          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', width: { xs: '100%', sm: 'auto' } }}>
-            <Button
-              variant="outlined"
-              startIcon={<LinkIcon />}
-              onClick={() => setOpenUriDialog(true)}
-              sx={{
-                borderColor: 'var(--primary)',
-                color: 'var(--primary)',
-                flex: { xs: 1, sm: 'unset' },
-                minHeight: 42,
-                '&:hover': {
-                  backgroundColor: 'rgba(20, 184, 166, 0.12)',
-                },
-              }}
-            >
-              Import URI
-            </Button>
+          <Box sx={{ display: 'flex', gap: 0.5, width: { xs: '100%', sm: 'auto' } }}>
             <Button
               variant="contained"
               startIcon={<AddIcon />}
+              size="small"
               onClick={() => handleOpenDialog()}
               sx={{
                 background: 'linear-gradient(90deg, var(--primary), var(--accent))',
                 flex: { xs: 1, sm: 'unset' },
-                minHeight: 42,
+                minHeight: 34,
               }}
             >
               Add Server
             </Button>
+            <IconButton
+              size="small"
+              onClick={handleOpenActionsMenu}
+              sx={{
+                border: '1px solid var(--border-light)',
+                color: 'var(--text-secondary)',
+                minHeight: 34,
+                minWidth: 34,
+                borderRadius: 1.5,
+                flex: { xs: 'unset', sm: 'unset' },
+              }}
+              aria-label="More server actions"
+            >
+              <MoreVertIcon fontSize="small" />
+            </IconButton>
+            <Menu
+              anchorEl={actionsAnchorEl}
+              open={Boolean(actionsAnchorEl)}
+              onClose={handleCloseActionsMenu}
+              anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+              transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+              MenuListProps={{ dense: true }}
+              PaperProps={{
+                sx: {
+                  mt: 0.5,
+                  border: '1px solid var(--border-light)',
+                  backgroundColor: 'var(--bg-card)',
+                  '& .MuiMenuItem-root': {
+                    minHeight: 30,
+                    py: 0.4,
+                    px: 1,
+                    fontSize: '0.78rem',
+                  },
+                  '& .MuiListItemIcon-root': {
+                    minWidth: 24,
+                  },
+                },
+              }}
+            >
+              <MenuItem
+                onClick={() => {
+                  handleCloseActionsMenu();
+                  setOpenUriDialog(true);
+                }}
+              >
+                <ListItemIcon><LinkIcon sx={{ fontSize: 16 }} /></ListItemIcon>
+                <ListItemText>Import URI</ListItemText>
+              </MenuItem>
+              <MenuItem
+                onClick={() => {
+                  handleCloseActionsMenu();
+                  handleOpenSubscriptionDialog();
+                }}
+              >
+                <ListItemIcon><SyncIcon sx={{ fontSize: 16 }} /></ListItemIcon>
+                <ListItemText>Add Subscription</ListItemText>
+              </MenuItem>
+              <MenuItem
+                onClick={() => {
+                  handleCloseActionsMenu();
+                  handlePingAll();
+                }}
+                disabled={pingAllLoading || servers.length === 0}
+              >
+                <ListItemIcon>{pingAllLoading ? <CircularProgress size={12} /> : <SpeedIcon sx={{ fontSize: 16 }} />}</ListItemIcon>
+                <ListItemText>{pingAllLoading ? 'Pinging...' : 'Ping All'}</ListItemText>
+              </MenuItem>
+            </Menu>
           </Box>
         </Box>
 
-        <Grid container spacing={2}>
-          {servers.map(server => {
+        {subscriptionMessage && (
+          <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSubscriptionMessage('')}>
+            {subscriptionMessage}
+          </Alert>
+        )}
+        {subscriptionError && (
+          <Alert severity="error" sx={{ mb: 2 }} onClose={() => setSubscriptionError('')}>
+            {subscriptionError}
+          </Alert>
+        )}
+        {subscriptions.length > 0 && (
+          <Card sx={{ mb: 1.5, backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-light)' }}>
+            <CardContent sx={{ p: '10px !important' }}>
+              <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.75, color: 'var(--text-strong)' }}>
+                Subscriptions
+              </Typography>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+                {subscriptions.map((subscription) => (
+                  <Chip
+                    key={subscription.id}
+                    size="small"
+                    label={subscription.name}
+                    onDelete={() => handleDeleteSubscription(subscription.id)}
+                    deleteIcon={<DeleteIcon />}
+                    onClick={() => handleRefreshSubscription(subscription.id)}
+                    icon={subscriptionLoadingId === subscription.id ? <CircularProgress size={14} /> : <SyncIcon />}
+                    sx={{
+                      maxWidth: 300,
+                      height: 24,
+                      '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' },
+                    }}
+                  />
+                ))}
+              </Box>
+            </CardContent>
+          </Card>
+        )}
+
+        <Grid container spacing={1.25}>
+          {sortedServers.map((server, index) => {
             const isConnected = connectionStatus.connected && connectionStatus.currentServer?.id === server.id;
             return (
               <Grid item xs={12} key={server.id}>
                 <Card
                   sx={{
-                    backgroundColor: 'var(--bg-card)',
+                    background: isConnected
+                      ? 'linear-gradient(180deg, rgba(16, 185, 129, 0.09), rgba(16, 25, 35, 0.95))'
+                      : 'linear-gradient(180deg, rgba(15, 23, 33, 0.96), rgba(16, 25, 35, 0.92))',
                     border: isConnected
                       ? '2px solid rgba(16, 185, 129, 0.5)'
                       : '1px solid var(--border-light)',
+                    boxShadow: isConnected ? '0 8px 24px rgba(16, 185, 129, 0.12)' : 'none',
                     '&:hover': {
                       borderColor: isConnected ? 'rgba(16, 185, 129, 0.7)' : 'rgba(56, 189, 248, 0.35)',
                     },
                   }}
                 >
-                  <CardContent>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', flexWrap: 'wrap', gap: 1 }}>
+                  <CardContent sx={{ p: '10px !important' }}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', flexWrap: 'wrap', gap: 0.75 }}>
                       <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-                          <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
+                          <Typography variant="subtitle1" sx={{ fontWeight: 650, lineHeight: 1.2 }}>
                             {server.name}
                           </Typography>
                           {isConnected && (
-                            <Chip label="Connected" size="small" sx={{ backgroundColor: 'rgba(34, 197, 94, 0.18)', color: 'var(--success)' }} />
+                            <Chip label="Connected" size="small" sx={{ height: 20, backgroundColor: 'rgba(34, 197, 94, 0.18)', color: 'var(--success)' }} />
                           )}
                         </Box>
-                        <Typography variant="body2" color="textSecondary">
+                        <Typography variant="caption" sx={{ color: 'var(--text-secondary)' }}>
                           {server.address}:{server.port}
                         </Typography>
-                        <Box sx={{ mt: 1, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                        <Box sx={{ mt: 0.75, display: 'flex', alignItems: 'center', gap: 0.6, flexWrap: 'wrap' }}>
                           <Chip
                             label={server.protocol.toUpperCase()}
                             size="small"
-                            sx={{ backgroundColor: 'rgba(20, 184, 166, 0.2)', color: 'var(--primary)' }}
+                            sx={{ height: 20, backgroundColor: 'rgba(20, 184, 166, 0.2)', color: 'var(--primary)' }}
                           />
+                          {pingResults[server.id]?.latency != null && (
+                            <Chip label={`P${index + 1}`} size="small" sx={{ height: 20, backgroundColor: 'rgba(148, 163, 184, 0.2)', color: 'var(--text-strong)' }} />
+                          )}
+                          {server.subscriptionId && (
+                            <Chip
+                              label="Subscription"
+                              size="small"
+                              sx={{ height: 20, backgroundColor: 'rgba(56, 189, 248, 0.2)', color: 'var(--accent)' }}
+                            />
+                          )}
                           {pingResults[server.id]?.latency != null && (
                             <Chip
                               label={`${pingResults[server.id].latency} ms`}
                               size="small"
-                              sx={{ backgroundColor: 'rgba(34, 197, 94, 0.2)', color: 'var(--success)' }}
+                              sx={{ height: 20, backgroundColor: 'rgba(34, 197, 94, 0.2)', color: 'var(--success)' }}
                             />
                           )}
                           {pingResults[server.id]?.error && !pingResults[server.id]?.latency && (
-                            <Chip label="Unreachable" size="small" sx={{ backgroundColor: 'rgba(239, 68, 68, 0.2)', color: 'var(--error)' }} />
+                            <Chip label="Unreachable" size="small" sx={{ height: 20, backgroundColor: 'rgba(239, 68, 68, 0.2)', color: 'var(--error)' }} />
                           )}
                         </Box>
                         {server.remarks && (
-                          <Typography variant="caption" sx={{ display: 'block', mt: 1, color: 'var(--text-secondary)' }}>
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              display: 'block',
+                              mt: 0.5,
+                              color: 'var(--text-secondary)',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                              maxWidth: '96%',
+                            }}
+                          >
                             {server.remarks}
                           </Typography>
                         )}
                       </Box>
-                      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center', justifyContent: { xs: 'flex-start', sm: 'flex-end' }, width: { xs: '100%', sm: 'auto' } }}>
+                      <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', alignItems: 'center', justifyContent: { xs: 'flex-start', sm: 'flex-end' }, width: { xs: '100%', sm: 'auto' } }}>
                         <Button
                           size="small"
                           variant="outlined"
-                          startIcon={pingingId === server.id ? <CircularProgress size={16} /> : <SpeedIcon />}
+                          startIcon={pingingServerIds[server.id] ? <CircularProgress size={16} /> : <SpeedIcon />}
                           onClick={() => handlePing(server.id)}
-                          disabled={pingingId === server.id}
-                          sx={{ borderColor: 'var(--success)', color: 'var(--success)', minWidth: { xs: 92, sm: 'auto' } }}
+                          disabled={Boolean(pingingServerIds[server.id]) || pingAllLoading}
+                          sx={{ borderColor: 'var(--success)', color: 'var(--success)', minWidth: { xs: 82, sm: 'auto' }, minHeight: 28, px: 1 }}
                         >
-                          {pingingId === server.id ? '…' : 'Test'}
+                          {pingingServerIds[server.id] ? '…' : 'Test'}
                         </Button>
                         {isConnected ? (
                           <Button
@@ -630,7 +842,7 @@ export default function ServerManager() {
                             startIcon={disconnectingId === server.id ? <CircularProgress size={16} /> : <DisconnectIcon />}
                             onClick={handleDisconnect}
                             disabled={disconnectingId === server.id}
-                            sx={{ minWidth: { xs: 124, sm: 'auto' } }}
+                            sx={{ minWidth: { xs: 106, sm: 'auto' }, minHeight: 28, px: 1 }}
                           >
                             {disconnectingId === server.id ? '…' : 'Disconnect'}
                           </Button>
@@ -649,16 +861,18 @@ export default function ServerManager() {
                             disabled={connectingId === server.id}
                             sx={{
                               background: 'linear-gradient(90deg, var(--primary), var(--accent))',
-                              minWidth: { xs: 124, sm: 100 },
+                              minWidth: { xs: 106, sm: 88 },
+                              minHeight: 28,
+                              px: 1,
                             }}
                           >
                             {connectingId === server.id ? '…' : 'Connect'}
                           </Button>
                         )}
-                        <IconButton size="small" onClick={() => handleOpenDialog(server)} sx={{ color: 'var(--primary)' }} aria-label="Edit">
+                        <IconButton size="small" onClick={() => handleOpenDialog(server)} sx={{ color: 'var(--primary)', p: 0.5 }} aria-label="Edit">
                           <EditIcon />
                         </IconButton>
-                        <IconButton size="small" onClick={() => handleDeleteServer(server.id)} sx={{ color: 'var(--error)' }} aria-label="Delete">
+                        <IconButton size="small" onClick={() => handleDeleteServer(server.id)} sx={{ color: 'var(--error)', p: 0.5 }} aria-label="Delete">
                           <DeleteIcon />
                         </IconButton>
                       </Box>
@@ -671,7 +885,7 @@ export default function ServerManager() {
         </Grid>
 
         {servers.length === 0 && (
-          <Card sx={{ backgroundColor: 'var(--bg-card)', textAlign: 'center', py: 6 }}>
+          <Card sx={{ backgroundColor: 'var(--bg-card)', textAlign: 'center', py: 4 }}>
             <Box sx={{ mb: 2 }}>
               <Typography color="textSecondary" sx={{ mb: 2 }}>
                 No servers added yet. Get started by adding a server:
@@ -818,30 +1032,73 @@ export default function ServerManager() {
 
       {/* URI Import Dialog */}
       <Dialog open={openUriDialog} onClose={handleCloseUriDialog} maxWidth="sm" fullWidth>
-        <DialogTitle>Import Server from URI</DialogTitle>
+        <DialogTitle>Import Servers from URI</DialogTitle>
         <DialogContent sx={{ pt: 2 }}>
           <Alert severity="info" sx={{ mb: 2 }}>
-            Paste your server sharing link or URI. Supported formats: VLESS, Vmess, Trojan, Shadowsocks.
+            Paste one or more server URIs. They will be split and imported one by one.
           </Alert>
 
           <TextField
             fullWidth
-            label="Paste Server URI"
-            placeholder="vless://uuid@address:port or vmess://... or trojan://... or ss://..."
+            label="Paste Server URIs"
+            placeholder="vless://...\nvmess://...\ntrojan://...\nss://..."
             value={uriInput}
             onChange={(e) => {
               setUriInput(e.target.value);
               setUriError('');
+              setUriMessage('');
+              setUriAnalysisResults([]);
             }}
             multiline
-            rows={4}
+            rows={8}
             sx={{ mb: 2 }}
           />
+
+          {uriMessage && (
+            <Alert severity="success" sx={{ mb: 2 }}>
+              {uriMessage}
+            </Alert>
+          )}
 
           {uriError && (
             <Alert severity="error" sx={{ mb: 2 }}>
               {uriError}
             </Alert>
+          )}
+
+          {uriAnalysisResults.length > 0 && (
+            <Box
+              sx={{
+                mb: 2,
+                p: 1,
+                border: '1px solid var(--border-light)',
+                borderRadius: 1.5,
+                maxHeight: 180,
+                overflowY: 'auto',
+                backgroundColor: 'rgba(15, 23, 33, 0.45)',
+              }}
+            >
+              {uriAnalysisResults.map((item, index) => (
+                <Box key={`${item.uri}-${index}`} sx={{ py: 0.5, borderBottom: index < uriAnalysisResults.length - 1 ? '1px solid rgba(148,163,184,0.15)' : 'none' }}>
+                  <Typography variant="caption" sx={{ display: 'block', color: 'var(--text-strong)' }}>
+                    {item.name || item.address || 'Unknown'} {item.protocol ? `(${String(item.protocol).toUpperCase()})` : ''}
+                  </Typography>
+                  {item.error ? (
+                    <Typography variant="caption" sx={{ color: 'var(--error)' }}>
+                      {item.error}
+                    </Typography>
+                  ) : item.ping?.success ? (
+                    <Typography variant="caption" sx={{ color: 'var(--success)' }}>
+                      Ping: {item.ping.latency ?? '-'} ms
+                    </Typography>
+                  ) : (
+                    <Typography variant="caption" sx={{ color: 'var(--error)' }}>
+                      Ping failed: {item.ping?.error || 'Unknown'}
+                    </Typography>
+                  )}
+                </Box>
+              ))}
+            </Box>
           )}
 
           <Typography variant="caption" color="textSecondary">
@@ -855,6 +1112,13 @@ export default function ServerManager() {
         <DialogActions>
           <Button onClick={handleCloseUriDialog}>Cancel</Button>
           <Button
+            onClick={handleAnalyzeUris}
+            variant="outlined"
+            disabled={uriAnalysisLoading || !uriInput.trim()}
+          >
+            {uriAnalysisLoading ? 'Calculating...' : 'Calculate Ping'}
+          </Button>
+          <Button
             onClick={handleImportUri}
             variant="contained"
             disabled={uriLoading}
@@ -862,7 +1126,46 @@ export default function ServerManager() {
               background: 'linear-gradient(90deg, var(--primary), var(--accent))',
             }}
           >
-            {uriLoading ? 'Parsing...' : 'Import'}
+            {uriLoading ? 'Importing...' : 'Import'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={openSubscriptionDialog} onClose={handleCloseSubscriptionDialog} maxWidth="sm" fullWidth>
+        <DialogTitle>Add Subscription</DialogTitle>
+        <DialogContent sx={{ pt: 2 }}>
+          {subscriptionFormError && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              {subscriptionFormError}
+            </Alert>
+          )}
+          <TextField
+            fullWidth
+            label="Subscription Name"
+            value={subscriptionForm.name}
+            onChange={(e) => setSubscriptionForm((prev) => ({ ...prev, name: e.target.value }))}
+            margin="normal"
+            disabled={subscriptionFormLoading}
+          />
+          <TextField
+            fullWidth
+            label="Subscription URL"
+            value={subscriptionForm.url}
+            onChange={(e) => setSubscriptionForm((prev) => ({ ...prev, url: e.target.value }))}
+            margin="normal"
+            disabled={subscriptionFormLoading}
+            placeholder="https://example.com/subscription.txt"
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseSubscriptionDialog} disabled={subscriptionFormLoading}>Cancel</Button>
+          <Button
+            onClick={handleAddSubscription}
+            variant="contained"
+            disabled={subscriptionFormLoading}
+            sx={{ background: 'linear-gradient(90deg, var(--primary), var(--accent))' }}
+          >
+            {subscriptionFormLoading ? 'Adding...' : 'Add & Import'}
           </Button>
         </DialogActions>
       </Dialog>

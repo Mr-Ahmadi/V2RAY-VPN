@@ -197,8 +197,8 @@ export default function Navbar() {
         onClick={handleMinimize}
         size="small"
         sx={{
-          width: 36,
-          height: 26,
+          width: 34,
+          height: 24,
           borderRadius: 0,
           color: 'var(--text-secondary)',
           '&:hover': { backgroundColor: 'rgba(148, 163, 184, 0.2)' },
@@ -211,8 +211,8 @@ export default function Navbar() {
         onClick={handleToggleMaximize}
         size="small"
         sx={{
-          width: 36,
-          height: 26,
+          width: 34,
+          height: 24,
           borderRadius: 0,
           color: 'var(--text-secondary)',
           '&:hover': { backgroundColor: 'rgba(148, 163, 184, 0.2)' },
@@ -225,8 +225,8 @@ export default function Navbar() {
         onClick={handleCloseWindow}
         size="small"
         sx={{
-          width: 44,
-          height: 26,
+          width: 40,
+          height: 24,
           borderRadius: 0,
           color: 'var(--text-secondary)',
           '&:hover': {
@@ -255,7 +255,7 @@ export default function Navbar() {
           WebkitAppRegion: 'drag',
         }}
       >
-        <Toolbar sx={{ minHeight: { xs: 40, sm: 42 }, px: { xs: 1, sm: 1.25 }, gap: 0.75 }}>
+        <Toolbar sx={{ minHeight: { xs: 34, sm: 36 }, px: { xs: 0.75, sm: 1 }, gap: 0.5 }}>
           {isMac && macWindowControls}
           <Typography
             variant="h6"
@@ -263,7 +263,7 @@ export default function Navbar() {
               flexGrow: 1,
               fontWeight: 700,
               letterSpacing: 0.2,
-              fontSize: { xs: '0.92rem', sm: '0.98rem' },
+              fontSize: { xs: '0.86rem', sm: '0.92rem' },
               background: 'linear-gradient(90deg, var(--primary), var(--accent))',
               backgroundClip: 'text',
               WebkitBackgroundClip: 'text',
@@ -273,10 +273,10 @@ export default function Navbar() {
             V2Ray VPN
           </Typography>
 
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, WebkitAppRegion: 'no-drag' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, WebkitAppRegion: 'no-drag' }}>
             <Tooltip title="View Logs">
-              <IconButton onClick={() => setLogsOpen(true)} size="small" sx={{ color: 'var(--text-secondary)' }}>
-                <BugIcon fontSize="small" />
+              <IconButton onClick={() => setLogsOpen(true)} size="small" sx={{ color: 'var(--text-secondary)', p: 0.4 }}>
+                <BugIcon sx={{ fontSize: 16 }} />
               </IconButton>
             </Tooltip>
 
@@ -285,8 +285,8 @@ export default function Navbar() {
                 label="Disconnected"
                 size="small"
                 sx={{
-                  height: 20,
-                  fontSize: '0.7rem',
+                  height: 18,
+                  fontSize: '0.66rem',
                   backgroundColor: 'rgba(148, 163, 184, 0.14)',
                   color: 'var(--text-secondary)',
                   border: '1px solid rgba(148, 163, 184, 0.2)',
@@ -296,14 +296,14 @@ export default function Navbar() {
 
             {status.connected && (
               <>
-                <Box sx={{ mr: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <VpnIcon sx={{ color: 'var(--success)', fontSize: 18 }} />
+                <Box sx={{ mr: 0.75, display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                  <VpnIcon sx={{ color: 'var(--success)', fontSize: 16 }} />
                   <Chip
                     label={status.currentServer?.name || 'Connected'}
                     size="small"
                     sx={{
-                      height: 20,
-                      fontSize: '0.7rem',
+                      height: 18,
+                      fontSize: '0.66rem',
                       backgroundColor: 'rgba(34, 197, 94, 0.12)',
                       color: 'var(--success)',
                     }}
@@ -313,11 +313,29 @@ export default function Navbar() {
                   id="menu-button"
                   onClick={handleMenuOpen}
                   color="inherit"
-                  sx={{ minWidth: 40, '&:hover': { backgroundColor: 'rgba(20, 184, 166, 0.12)' } }}
+                  sx={{ minWidth: 34, p: 0.5, '&:hover': { backgroundColor: 'rgba(20, 184, 166, 0.12)' } }}
                 >
-                  <MoreIcon />
+                  <MoreIcon sx={{ fontSize: 18 }} />
                 </IconButton>
-                <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={handleMenuClose}>
+                <Menu
+                  anchorEl={anchorEl}
+                  open={Boolean(anchorEl)}
+                  onClose={handleMenuClose}
+                  MenuListProps={{ dense: true }}
+                  PaperProps={{
+                    sx: {
+                      mt: 0.5,
+                      border: '1px solid var(--border-light)',
+                      backgroundColor: 'var(--bg-card)',
+                      '& .MuiMenuItem-root': {
+                        minHeight: 30,
+                        py: 0.4,
+                        px: 1,
+                        fontSize: '0.78rem',
+                      },
+                    },
+                  }}
+                >
                   <MenuItem onClick={handleDisconnect} sx={{ color: '#ef4444' }}>
                     Disconnect VPN
                   </MenuItem>

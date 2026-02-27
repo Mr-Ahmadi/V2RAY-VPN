@@ -15,6 +15,17 @@ const electronAPI = {
     delete: (serverId: string) => ipcRenderer.invoke('server:delete', serverId),
     update: (serverId: string, config: any) => ipcRenderer.invoke('server:update', serverId, config),
     ping: (serverId: string) => ipcRenderer.invoke('server:ping', serverId),
+    savePingResult: (serverId: string, payload: { latency?: number; error?: string }) =>
+      ipcRenderer.invoke('server:savePingResult', serverId, payload),
+    analyzeUris: (input: string, includePing?: boolean) => ipcRenderer.invoke('server:analyzeUris', input, includePing),
+    importUris: (input: string) => ipcRenderer.invoke('server:importUris', input),
+  },
+
+  subscription: {
+    add: (payload: { name: string; url: string }) => ipcRenderer.invoke('subscription:add', payload),
+    list: () => ipcRenderer.invoke('subscription:list'),
+    refresh: (subscriptionId: string) => ipcRenderer.invoke('subscription:refresh', subscriptionId),
+    delete: (subscriptionId: string) => ipcRenderer.invoke('subscription:delete', subscriptionId),
   },
 
   // App routing

@@ -332,17 +332,18 @@ export default function AppRouting() {
   }
 
   return (
-    <Box sx={{ py: 3, minHeight: '100%' }}>
+    <Box sx={{ py: 2, minHeight: '100%' }}>
       <Container maxWidth="lg">
-        <Box sx={{ mb: 3 }}>
-          <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mb: 1 }}>
-            <Typography variant="h4" sx={{ fontWeight: 700, letterSpacing: '-0.02em' }}>
+        <Box sx={{ mb: 2 }}>
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
+            <Typography variant="h6" sx={{ fontWeight: 700, letterSpacing: 0.2 }}>
               Application Routing
             </Typography>
             <Chip
               size="small"
               label={`Proxy Mode: ${effectiveProxyMode}`}
               sx={{
+                height: 20,
                 color: 'var(--primary)',
                 border: '1px solid rgba(20, 184, 166, 0.35)',
                 backgroundColor: 'rgba(20, 184, 166, 0.12)',
@@ -357,13 +358,14 @@ export default function AppRouting() {
           </Typography>
         </Box>
 
-        <Card className="glass" sx={{ border: 'none', background: 'var(--bg-glass)', mb: 2 }}>
-          <CardContent sx={{ p: '12px !important' }}>
-            <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ xs: 'stretch', md: 'center' }}>
+        <Card className="glass" sx={{ border: 'none', background: 'var(--bg-glass)', mb: 1.5 }}>
+          <CardContent sx={{ p: '10px !important' }}>
+            <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.25} alignItems={{ xs: 'stretch', md: 'center' }}>
               <TextField
                 fullWidth
                 variant="standard"
                 placeholder="Find an application..."
+                size="small"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 InputProps={{
@@ -377,8 +379,8 @@ export default function AppRouting() {
                 sx={{
                   '& .MuiInputBase-input': {
                     color: 'var(--text-primary)',
-                    py: 1.5,
-                    fontSize: '1rem',
+                    py: 1.1,
+                    fontSize: '0.92rem',
                   },
                 }}
               />
@@ -394,6 +396,9 @@ export default function AppRouting() {
                   '& .MuiToggleButton-root': {
                     flex: { xs: 1, md: 'unset' },
                     whiteSpace: 'nowrap',
+                    minHeight: 30,
+                    fontSize: '0.72rem',
+                    px: 1.1,
                   },
                 }}
               >
@@ -408,14 +413,14 @@ export default function AppRouting() {
 
 
 
-        <Box sx={{ mb: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
-          <ProxyIcon sx={{ fontSize: 18, color: 'var(--primary)' }} />
-          <Typography variant="overline" sx={{ fontWeight: 700, color: 'var(--primary)', letterSpacing: '0.1em' }}>
+        <Box sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 0.75 }}>
+          <ProxyIcon sx={{ fontSize: 16, color: 'var(--primary)' }} />
+          <Typography variant="caption" sx={{ fontWeight: 700, color: 'var(--primary)', letterSpacing: '0.08em' }}>
             Application Policies ({filteredApps.length})
           </Typography>
         </Box>
 
-        <Card sx={{ backgroundColor: 'var(--bg-card)', borderRadius: 3, overflow: 'hidden' }}>
+        <Card sx={{ backgroundColor: 'var(--bg-card)', borderRadius: 2.5, overflow: 'hidden' }}>
           <List disablePadding>
             {filteredApps.length > 0 ? (
               filteredApps.map((app, index) => {
@@ -428,29 +433,29 @@ export default function AppRouting() {
                   <React.Fragment key={app.path}>
                     {index > 0 && <Divider sx={{ borderColor: 'rgba(255,255,255,0.05)' }} />}
                     <ListItem disablePadding>
-                      <ListItemButton sx={{ py: 1.75, '&:hover': { backgroundColor: 'rgba(20, 184, 166, 0.08)' } }}>
-                        <ListItemIcon sx={{ minWidth: 44 }}>{getAppIcon(app.name)}</ListItemIcon>
+                      <ListItemButton sx={{ py: 1.1, '&:hover': { backgroundColor: 'rgba(20, 184, 166, 0.08)' } }}>
+                        <ListItemIcon sx={{ minWidth: 38 }}>{getAppIcon(app.name)}</ListItemIcon>
                         <ListItemText
                           primary={
                             <Stack direction="row" spacing={1} alignItems="center" useFlexGap flexWrap="wrap">
-                              <Typography component="span" sx={{ fontWeight: 500, color: 'var(--text-primary)' }}>
+                              <Typography component="span" sx={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: '0.9rem' }}>
                                 {app.name}
                               </Typography>
                               <Chip
                                 size="small"
                                 label={engineInfo.label}
                                 sx={{
-                                  height: 20,
+                                  height: 18,
                                   color: engineInfo.color,
                                   backgroundColor: 'rgba(15,23,42,0.38)',
                                   border: `1px solid ${engineInfo.color}33`,
-                                  '& .MuiChip-label': { px: 0.8, fontSize: '0.66rem' },
+                                  '& .MuiChip-label': { px: 0.7, fontSize: '0.62rem' },
                                 }}
                               />
                             </Stack>
                           }
                           secondary={`${app.path} | ${getPolicyLabel(policy)}`}
-                          secondaryTypographyProps={{ sx: { color: 'var(--text-muted)', fontSize: '0.75rem' } }}
+                          secondaryTypographyProps={{ sx: { color: 'var(--text-muted)', fontSize: '0.7rem' } }}
                         />
                         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }}>
                           <Select
@@ -462,8 +467,9 @@ export default function AppRouting() {
                               setPolicy(app.path, e.target.value as AppRoutePolicy);
                             }}
                             sx={{
-                              minWidth: 158,
+                              minWidth: 146,
                               color: 'var(--text-strong)',
+                              fontSize: '0.8rem',
                               '& .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(148, 163, 184, 0.35)' },
                               '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(148, 163, 184, 0.6)' },
                             }}
@@ -490,6 +496,7 @@ export default function AppRouting() {
                               e.stopPropagation();
                               applyPolicyNow(app, policy);
                             }}
+                            sx={{ minHeight: 30, px: 1.2, fontSize: '0.72rem' }}
                           >
                             {isBusy ? <CircularProgress size={14} /> : 'Apply Now'}
                           </Button>
@@ -497,14 +504,14 @@ export default function AppRouting() {
                       </ListItemButton>
                     </ListItem>
                     {bypassUnavailable && (
-                      <Box sx={{ px: 2.5, pb: 1.5 }}>
+                      <Box sx={{ px: 2, pb: 1 }}>
                         <Typography variant="caption" sx={{ color: 'var(--text-muted)' }}>
                           Bypass is unavailable for Safari while Proxy Mode is Global/PAC.
                         </Typography>
                       </Box>
                     )}
                     {vpnUnavailable && (
-                      <Box sx={{ px: 2.5, pb: 1.5 }}>
+                      <Box sx={{ px: 2, pb: 1 }}>
                         <Typography variant="caption" sx={{ color: 'var(--text-muted)' }}>
                           Use VPN is unavailable for Safari while Proxy Mode is per-app.
                         </Typography>
@@ -514,7 +521,7 @@ export default function AppRouting() {
                 );
               })
             ) : (
-              <Box sx={{ py: 6, textAlign: 'center' }}>
+              <Box sx={{ py: 4, textAlign: 'center' }}>
                 <Typography sx={{ color: 'var(--text-secondary)' }}>
                   No applications found for this filter.
                 </Typography>

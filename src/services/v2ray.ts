@@ -80,6 +80,59 @@ export class V2RayService {
     return value === true || value === 'true' || value === 1 || value === '1';
   }
 
+  private normalizeDnsAddress(value: unknown): string | null {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+
+    if (net.isIP(raw) !== 0) {
+      return raw;
+    }
+
+    // Accept hostname-style DNS targets.
+    if (/^(?=.{1,253}$)([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,63}$/.test(raw)) {
+      return raw.toLowerCase();
+    }
+
+    return null;
+  }
+
+  private parseCustomDnsAddresses(settings: Record<string, any>): string[] {
+    const values = [
+      settings.primaryDns,
+      settings.secondaryDns,
+    ]
+      .flatMap((value) => String(value || '').split(/[,\s]+/g))
+      .map((value) => this.normalizeDnsAddress(value))
+      .filter((value): value is string => Boolean(value));
+
+    return Array.from(new Set(values));
+  }
+
+  private buildDnsServers(settings: Record<string, any>): any[] {
+    const dnsProvider = settings.dnsProvider || 'cloudflare';
+
+    switch (dnsProvider) {
+      case 'cloudflare':
+        return [{ address: '1.1.1.1', port: 53 }, { address: '1.0.0.1', port: 53 }];
+      case 'google':
+        return [{ address: '8.8.8.8', port: 53 }, { address: '8.8.4.4', port: 53 }];
+      case 'quad9':
+        return [{ address: '9.9.9.9', port: 53 }, { address: '149.112.112.112', port: 53 }];
+      case 'opendns':
+        return [{ address: '208.67.222.222', port: 53 }, { address: '208.67.220.220', port: 53 }];
+      case 'custom': {
+        const addresses = this.parseCustomDnsAddresses(settings);
+        if (addresses.length > 0) {
+          return addresses.map((address) => ({ address, port: 53 }));
+        }
+        // Fallback if custom values are missing/invalid.
+        return [{ address: '1.1.1.1', port: 53 }, { address: '1.0.0.1', port: 53 }];
+      }
+      default:
+        return [{ address: '1.1.1.1', port: 53 }, { address: '8.8.8.8', port: 53 }];
+    }
+  }
+
   private getConnectionTimeoutMs(settings: Record<string, any>): number {
     const seconds = Number(settings?.connectionTimeout);
     if (!Number.isFinite(seconds) || seconds <= 0) {
@@ -331,6 +384,7 @@ export class V2RayService {
       const routingMode = this.normalizeRoutingMode(settings.routingMode);
       const proxyMode = this.getEffectiveProxyMode(settings, routingMode);
       const dnsProvider = settings.dnsProvider || 'cloudflare';
+      const dnsServers = this.buildDnsServers(settings);
       const blockAds = settings.blockAds !== false;
       const connectionTimeoutMs = this.getConnectionTimeoutMs(settings);
       this.proxyRequestTimeoutMs = Math.min(connectionTimeoutMs, 15000);
@@ -339,6 +393,7 @@ export class V2RayService {
         routingMode,
         proxyMode,
         dnsProvider,
+        dnsServers: dnsServers.map((entry) => entry.address),
         blockAds,
         enableMux: settings.enableMux === true,
         reconnectOnDisconnect: settings.reconnectOnDisconnect === true,
@@ -1276,29 +1331,7 @@ export class V2RayService {
     });
 
     // 5. DNS Configuration
-    const dnsProvider = settings.dnsProvider || 'cloudflare';
-    let dnsServers: any[] = [];
-    switch (dnsProvider) {
-      case 'cloudflare':
-        dnsServers = [{ address: '1.1.1.1', port: 53 }, { address: '1.0.0.1', port: 53 }];
-        break;
-      case 'google':
-        dnsServers = [{ address: '8.8.8.8', port: 53 }, { address: '8.8.4.4', port: 53 }];
-        break;
-      case 'quad9':
-        dnsServers = [{ address: '9.9.9.9', port: 53 }, { address: '149.112.112.112', port: 53 }];
-        break;
-      case 'opendns':
-        dnsServers = [{ address: '208.67.222.222', port: 53 }, { address: '208.67.220.220', port: 53 }];
-        break;
-      case 'custom':
-        if (settings.primaryDns) dnsServers.push({ address: settings.primaryDns, port: 53 });
-        if (settings.secondaryDns) dnsServers.push({ address: settings.secondaryDns, port: 53 });
-        if (dnsServers.length === 0) dnsServers = [{ address: '1.1.1.1', port: 53 }];
-        break;
-      default:
-        dnsServers = [{ address: '1.1.1.1', port: 53 }, { address: '8.8.8.8', port: 53 }];
-    }
+    const dnsServers = this.buildDnsServers(settings);
     const dnsQueryStrategy = settings.ipv6Disable === true ? 'UseIPv4' : 'UseIP';
     builder.setDns(dnsServers, dnsQueryStrategy);
 
@@ -2032,6 +2065,28 @@ export class V2RayService {
       const server = await this.getServerManager().getServer(serverId);
       if (!server) throw new Error('Server not found');
 
+      return this.testServerLatencyByConfig(server, `db-${serverId}`);
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  async testServerInputRealDelay(serverInput: Omit<Server, 'id'>): Promise<{ success: boolean; latency?: number; error?: string }> {
+    try {
+      const syntheticId = `preview-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const server: Server = {
+        id: syntheticId,
+        ...serverInput,
+      };
+      return this.testServerLatencyByConfig(server, syntheticId);
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  private async testServerLatencyByConfig(server: Server, tempKey: string): Promise<{ success: boolean; latency?: number; error?: string }> {
+    try {
+
       // To test "Real Delay" without interrupting current connection:
       // 1. Generate a temporary config with a random port
       // 2. Start a temporary V2Ray process
@@ -2055,7 +2110,7 @@ export class V2RayService {
       delete tempConfig.api;
       delete tempConfig.policy;
 
-      const tempConfigPath = path.join(app.getPath('userData'), `test-config-${serverId}.json`);
+      const tempConfigPath = path.join(app.getPath('userData'), `test-config-${tempKey}.json`);
       fs.writeFileSync(tempConfigPath, JSON.stringify(tempConfig));
 
       const v2rayProcess = spawn(this.v2rayCorePath, ['run', '-c', tempConfigPath], {
