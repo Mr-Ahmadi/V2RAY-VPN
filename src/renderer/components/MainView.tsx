@@ -70,15 +70,15 @@ export default function MainView() {
           position: 'sticky',
           top: 0,
           zIndex: 20,
-          background: 'linear-gradient(to bottom, rgba(11, 17, 23, 0.94), rgba(11, 17, 23, 0.78))',
-          backdropFilter: 'blur(8px)',
-          WebkitBackdropFilter: 'blur(8px)',
+          background: 'linear-gradient(to bottom, rgba(9, 15, 20, 0.96), rgba(9, 15, 20, 0.84))',
+          backdropFilter: 'blur(10px)',
+          WebkitBackdropFilter: 'blur(10px)',
           borderBottom: '1px solid rgba(56, 189, 248, 0.12)',
-          pb: 0.5,
+          pb: 1,
         }}
       >
         <ConnectionBar />
-        <Box sx={{ px: { xs: 1, sm: 1.5 }, pt: 0.5 }}>
+        <Box sx={{ px: { xs: 1, sm: 1.5 }, pt: 0.75 }}>
           <Tabs
             value={value}
             onChange={handleChange}
@@ -87,22 +87,22 @@ export default function MainView() {
             scrollButtons={isMobile ? 'auto' : false}
             allowScrollButtonsMobile
             sx={{
-              backgroundColor: 'rgba(16, 25, 35, 0.78)',
+              backgroundColor: 'rgba(16, 25, 35, 0.8)',
               border: '1px solid var(--border-light)',
-              borderRadius: 3,
-              minHeight: 46,
-              p: 0.375,
-              boxShadow: 'inset 0 1px 0 rgba(148, 163, 184, 0.1)',
+              borderRadius: 2.5,
+              minHeight: 48,
+              p: 0.5,
               '& .MuiTabs-scrollButtons': {
                 color: 'var(--text-secondary)',
               },
               '& .MuiTab-root': {
                 color: 'var(--text-secondary)',
                 minHeight: 38,
-                borderRadius: 2,
+                borderRadius: 1.75,
                 minWidth: isMobile ? 104 : 'auto',
                 px: { xs: 1, sm: 2 },
                 py: 0.25,
+                zIndex: 1,
                 transition: 'all 0.2s ease',
                 '&.Mui-selected': { color: 'var(--text-primary)' },
                 '& .MuiSvgIcon-root': {
@@ -110,10 +110,10 @@ export default function MainView() {
                 },
               },
               '& .MuiTabs-indicator': {
-                height: '100%',
-                borderRadius: 2,
-                background: 'linear-gradient(90deg, rgba(20, 184, 166, 0.2), rgba(56, 189, 248, 0.2))',
-                zIndex: 0,
+                height: 'calc(100% - 8px)',
+                margin: '4px',
+                borderRadius: 1.75,
+                background: 'linear-gradient(90deg, rgba(20, 184, 166, 0.22), rgba(56, 189, 248, 0.2))',
               },
               '& .MuiTabs-flexContainer': { gap: 0.5 },
             }}
@@ -135,7 +135,7 @@ export default function MainView() {
         </Box>
       </Box>
 
-      <Box sx={{ px: { xs: 0.5, sm: 1 }, pb: 2 }}>
+      <Box sx={{ px: { xs: 0.5, sm: 1 }, pb: 2.5, pt: 0.5 }}>
         <TabPanel value={value} index={0}>
           <ServerManager />
         </TabPanel>

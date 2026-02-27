@@ -34,7 +34,6 @@ export default function Navbar() {
   const [platform, setPlatform] = useState<string>('unknown');
 
   useEffect(() => {
-    // Poll connection status
     const checkStatus = async () => {
       try {
         const result = await window.electronAPI.v2ray.getStatus();
@@ -197,11 +196,11 @@ export default function Navbar() {
         onClick={handleMinimize}
         size="small"
         sx={{
-          width: 34,
-          height: 24,
+          width: 36,
+          height: 26,
           borderRadius: 0,
           color: 'var(--text-secondary)',
-          '&:hover': { backgroundColor: 'rgba(148, 163, 184, 0.2)' },
+          '&:hover': { backgroundColor: 'rgba(148, 163, 184, 0.16)' },
         }}
       >
         <MinimizeIcon sx={{ fontSize: 14 }} />
@@ -211,11 +210,11 @@ export default function Navbar() {
         onClick={handleToggleMaximize}
         size="small"
         sx={{
-          width: 34,
-          height: 24,
+          width: 36,
+          height: 26,
           borderRadius: 0,
           color: 'var(--text-secondary)',
-          '&:hover': { backgroundColor: 'rgba(148, 163, 184, 0.2)' },
+          '&:hover': { backgroundColor: 'rgba(148, 163, 184, 0.16)' },
         }}
       >
         {isMaximized ? <RestoreIcon sx={{ fontSize: 13 }} /> : <MaximizeIcon sx={{ fontSize: 13 }} />}
@@ -225,8 +224,8 @@ export default function Navbar() {
         onClick={handleCloseWindow}
         size="small"
         sx={{
-          width: 40,
-          height: 24,
+          width: 42,
+          height: 26,
           borderRadius: 0,
           color: 'var(--text-secondary)',
           '&:hover': {
@@ -247,23 +246,24 @@ export default function Navbar() {
         sx={{
           top: 0,
           zIndex: theme => theme.zIndex.drawer + 2,
-          background: 'linear-gradient(90deg, rgba(17, 28, 39, 0.92) 0%, rgba(20, 34, 53, 0.9) 100%)',
-          backdropFilter: 'blur(10px)',
-          WebkitBackdropFilter: 'blur(10px)',
+          background: 'linear-gradient(90deg, rgba(13, 21, 30, 0.96) 0%, rgba(16, 26, 38, 0.94) 100%)',
+          backdropFilter: 'blur(12px)',
+          WebkitBackdropFilter: 'blur(12px)',
           borderBottom: '1px solid var(--border-light)',
-          boxShadow: '0 10px 30px rgba(0, 0, 0, 0.2)',
+          boxShadow: '0 8px 24px rgba(2, 8, 23, 0.28)',
           WebkitAppRegion: 'drag',
         }}
       >
-        <Toolbar sx={{ minHeight: { xs: 34, sm: 36 }, px: { xs: 0.75, sm: 1 }, gap: 0.5 }}>
+        <Toolbar sx={{ minHeight: { xs: 36, sm: 40 }, px: { xs: 0.75, sm: 1 }, gap: 0.75 }}>
           {isMac && macWindowControls}
+
           <Typography
             variant="h6"
             sx={{
               flexGrow: 1,
               fontWeight: 700,
               letterSpacing: 0.2,
-              fontSize: { xs: '0.86rem', sm: '0.92rem' },
+              fontSize: { xs: '0.9rem', sm: '0.97rem' },
               background: 'linear-gradient(90deg, var(--primary), var(--accent))',
               backgroundClip: 'text',
               WebkitBackgroundClip: 'text',
@@ -275,7 +275,16 @@ export default function Navbar() {
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, WebkitAppRegion: 'no-drag' }}>
             <Tooltip title="View Logs">
-              <IconButton onClick={() => setLogsOpen(true)} size="small" sx={{ color: 'var(--text-secondary)', p: 0.4 }}>
+              <IconButton
+                onClick={() => setLogsOpen(true)}
+                size="small"
+                sx={{
+                  color: 'var(--text-secondary)',
+                  border: '1px solid rgba(148, 163, 184, 0.2)',
+                  p: 0.55,
+                  '&:hover': { backgroundColor: 'rgba(56, 189, 248, 0.1)', color: 'var(--accent)' },
+                }}
+              >
                 <BugIcon sx={{ fontSize: 16 }} />
               </IconButton>
             </Tooltip>
@@ -285,8 +294,8 @@ export default function Navbar() {
                 label="Disconnected"
                 size="small"
                 sx={{
-                  height: 18,
-                  fontSize: '0.66rem',
+                  height: 20,
+                  fontSize: '0.68rem',
                   backgroundColor: 'rgba(148, 163, 184, 0.14)',
                   color: 'var(--text-secondary)',
                   border: '1px solid rgba(148, 163, 184, 0.2)',
@@ -296,16 +305,22 @@ export default function Navbar() {
 
             {status.connected && (
               <>
-                <Box sx={{ mr: 0.75, display: 'flex', alignItems: 'center', gap: 0.75 }}>
-                  <VpnIcon sx={{ color: 'var(--success)', fontSize: 16 }} />
+                <Box sx={{ mr: 0.5, display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  <VpnIcon sx={{ color: 'var(--success)', fontSize: 15 }} />
                   <Chip
                     label={status.currentServer?.name || 'Connected'}
                     size="small"
                     sx={{
-                      height: 18,
-                      fontSize: '0.66rem',
-                      backgroundColor: 'rgba(34, 197, 94, 0.12)',
+                      height: 20,
+                      fontSize: '0.68rem',
+                      maxWidth: 180,
+                      '& .MuiChip-label': {
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      },
+                      backgroundColor: 'rgba(34, 197, 94, 0.14)',
                       color: 'var(--success)',
+                      border: '1px solid rgba(34, 197, 94, 0.25)',
                     }}
                   />
                 </Box>

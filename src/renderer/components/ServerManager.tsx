@@ -609,8 +609,12 @@ export default function ServerManager() {
     );
   }
 
+  const connectedServerId = connectionStatus.currentServer?.id;
+  const connectedCount = connectionStatus.connected && connectedServerId ? 1 : 0;
+  const reachableCount = Object.values(pingResults).filter((result) => typeof result.latency === 'number').length;
+
   return (
-    <Box sx={{ py: 2 }}>
+    <Box sx={{ py: 2.5 }}>
       <Container maxWidth="lg">
         {connectError && (
           <Alert severity="error" sx={{ mb: 2 }} onClose={() => setConnectError('')}>
@@ -619,10 +623,38 @@ export default function ServerManager() {
               : connectError}
           </Alert>
         )}
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2, gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
-          <Typography variant="h6" sx={{ fontWeight: 700, letterSpacing: 0.2 }}>
-            Servers
-          </Typography>
+        <Box
+          sx={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            mb: 1.5,
+            gap: 1,
+            flexWrap: 'wrap',
+            alignItems: 'center',
+          }}
+        >
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+            <Typography variant="h6" sx={{ fontWeight: 700, letterSpacing: 0.2 }}>
+              Server Manager
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
+              <Chip size="small" label={`${servers.length} total`} sx={{ height: 22 }} />
+              <Chip
+                size="small"
+                label={`${reachableCount} reachable`}
+                sx={{ height: 22, color: 'var(--success)', backgroundColor: 'rgba(34, 197, 94, 0.14)' }}
+              />
+              <Chip
+                size="small"
+                label={connectedCount > 0 ? '1 connected' : 'disconnected'}
+                sx={{
+                  height: 22,
+                  color: connectedCount > 0 ? 'var(--success)' : 'var(--text-secondary)',
+                  backgroundColor: connectedCount > 0 ? 'rgba(34, 197, 94, 0.14)' : 'rgba(148, 163, 184, 0.16)',
+                }}
+              />
+            </Box>
+          </Box>
           <Box sx={{ display: 'flex', gap: 0.5, width: { xs: '100%', sm: 'auto' } }}>
             <Button
               variant="contained"
@@ -632,7 +664,7 @@ export default function ServerManager() {
               sx={{
                 background: 'linear-gradient(90deg, var(--primary), var(--accent))',
                 flex: { xs: 1, sm: 'unset' },
-                minHeight: 34,
+                minHeight: 34.5,
               }}
             >
               Add Server
@@ -746,7 +778,7 @@ export default function ServerManager() {
           </Card>
         )}
 
-        <Grid container spacing={1.25}>
+        <Grid container spacing={1.5}>
           {sortedServers.map((server, index) => {
             const isConnected = connectionStatus.connected && connectionStatus.currentServer?.id === server.id;
             return (
@@ -760,12 +792,13 @@ export default function ServerManager() {
                       ? '2px solid rgba(16, 185, 129, 0.5)'
                       : '1px solid var(--border-light)',
                     boxShadow: isConnected ? '0 8px 24px rgba(16, 185, 129, 0.12)' : 'none',
+                    borderRadius: 2.25,
                     '&:hover': {
                       borderColor: isConnected ? 'rgba(16, 185, 129, 0.7)' : 'rgba(56, 189, 248, 0.35)',
                     },
                   }}
                 >
-                  <CardContent sx={{ p: '10px !important' }}>
+                  <CardContent sx={{ p: '12px !important' }}>
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', flexWrap: 'wrap', gap: 0.75 }}>
                       <Box sx={{ flex: 1, minWidth: 0 }}>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
@@ -885,10 +918,13 @@ export default function ServerManager() {
         </Grid>
 
         {servers.length === 0 && (
-          <Card sx={{ backgroundColor: 'var(--bg-card)', textAlign: 'center', py: 4 }}>
+          <Card sx={{ backgroundColor: 'var(--bg-card)', textAlign: 'center', py: 5, borderRadius: 2.5 }}>
             <Box sx={{ mb: 2 }}>
-              <Typography color="textSecondary" sx={{ mb: 2 }}>
+              <Typography color="textSecondary" sx={{ mb: 0.5 }}>
                 No servers added yet. Get started by adding a server:
+              </Typography>
+              <Typography variant="caption" sx={{ color: 'var(--text-muted)' }}>
+                Import from URI for speed, or add manually for full control.
               </Typography>
             </Box>
             <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>

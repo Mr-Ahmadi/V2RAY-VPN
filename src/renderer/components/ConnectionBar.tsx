@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Box, Typography, Button, Tooltip, CircularProgress } from '@mui/material';
+import { Box, Typography, Button, Tooltip, CircularProgress, Chip } from '@mui/material';
 import {
   CallEnd as DisconnectIcon,
   ArrowUpward as UpIcon,
@@ -32,7 +32,7 @@ export default function ConnectionBar() {
 
   useEffect(() => {
     checkStatus();
-    const interval = setInterval(checkStatus, 1000); // Poll faster for better UI feedback
+    const interval = setInterval(checkStatus, 1000);
     return () => clearInterval(interval);
   }, [checkStatus]);
 
@@ -50,100 +50,87 @@ export default function ConnectionBar() {
   const isDisconnecting = status.state === 'disconnecting';
   const isError = status.state === 'error';
 
+  const pingColor =
+    status.ping == null
+      ? 'var(--text-secondary)'
+      : status.ping < 300
+        ? 'var(--success)'
+        : status.ping < 800
+          ? 'var(--secondary)'
+          : 'var(--error)';
+
   return (
     <Box
       sx={{
-        py: 0.75,
+        py: 0.8,
         px: { xs: 1, sm: 1.5 },
-        backgroundColor: isError ? 'rgba(239, 68, 68, 0.1)' : 'rgba(34, 197, 94, 0.08)',
-        backdropFilter: 'blur(10px)',
+        backgroundColor: isError ? 'rgba(239, 68, 68, 0.08)' : 'rgba(34, 197, 94, 0.08)',
         borderBottom: '1px solid',
         borderColor: isError ? 'rgba(239, 68, 68, 0.2)' : 'rgba(34, 197, 94, 0.2)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        animation: 'slideDown 0.4s ease-out',
-        '@keyframes slideDown': {
-          from: { transform: 'translateY(-100%)' },
-          to: { transform: 'translateY(0)' }
-        }
+        gap: 1,
       }}
     >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap', flex: 1 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          {/* Status Icon/Animation */}
-          {(isConnecting || isDisconnecting) ? (
-            <CircularProgress size={16} sx={{ color: 'var(--primary)' }} />
-          ) : isError ? (
-            <ErrorIcon sx={{ color: 'var(--error)' }} />
-          ) : (
-            <Box
-              sx={{
-                width: 8,
-                height: 8,
-                borderRadius: '50%',
-                backgroundColor: 'var(--success)',
-                boxShadow: '0 0 10px rgba(34, 197, 94, 0.7)',
-                animation: 'pulse 2s infinite',
-                '@keyframes pulse': {
-                  '0%': { opacity: 0.6, transform: 'scale(0.8)' },
-                  '50%': { opacity: 1, transform: 'scale(1.2)' },
-                  '100%': { opacity: 0.6, transform: 'scale(0.8)' }
-                }
-              }}
-            />
-          )}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', flex: 1, minWidth: 0 }}>
+        {isConnecting || isDisconnecting ? (
+          <CircularProgress size={14} sx={{ color: 'var(--primary)' }} />
+        ) : isError ? (
+          <ErrorIcon sx={{ color: 'var(--error)', fontSize: 16 }} />
+        ) : (
+          <Box sx={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: 'var(--success)' }} />
+        )}
 
-          <Typography variant="caption" sx={{ fontWeight: 600, color: isError ? 'var(--error)' : 'var(--success)' }}>
-            {isConnecting ? 'Authentication...' :
-              isDisconnecting ? 'Disconnecting...' :
-                isError ? 'Connection Failed' :
-                  `Connected to ${status.currentServer?.name ?? 'VPN'}`}
-          </Typography>
-        </Box>
+        <Typography
+          variant="caption"
+          sx={{ fontWeight: 700, color: isError ? 'var(--error)' : 'var(--success)', whiteSpace: 'nowrap' }}
+        >
+          {isConnecting
+            ? 'Connecting'
+            : isDisconnecting
+              ? 'Disconnecting'
+              : isError
+                ? 'Connection Failed'
+                : `Connected to ${status.currentServer?.name ?? 'VPN'}`}
+        </Typography>
 
         {status.state === 'connected' && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, animation: 'fadeIn 0.5s ease-in', '@keyframes fadeIn': { from: { opacity: 0 }, to: { opacity: 1 } } }}>
-            <Tooltip title="Upload Speed">
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                <UpIcon sx={{ fontSize: 14, color: 'var(--accent)' }} />
-                <Typography variant="caption" sx={{ color: 'var(--text-strong)', fontWeight: 500, minWidth: '42px', fontSize: '0.68rem' }}>
-                  {status.uploadSpeed != null ? status.uploadSpeed.toFixed(2) : '0.00'} <span style={{ color: 'var(--text-secondary)' }}>Mb/s</span>
-                </Typography>
-              </Box>
-            </Tooltip>
-
-            <Tooltip title="Download Speed">
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                <DownIcon sx={{ fontSize: 14, color: 'var(--secondary)' }} />
-                <Typography variant="caption" sx={{ color: 'var(--text-strong)', fontWeight: 500, minWidth: '42px', fontSize: '0.68rem' }}>
-                  {status.downloadSpeed != null ? status.downloadSpeed.toFixed(2) : '0.00'} <span style={{ color: 'var(--text-secondary)' }}>Mb/s</span>
-                </Typography>
-              </Box>
-            </Tooltip>
-
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
+            <Chip
+              size="small"
+              icon={<UpIcon sx={{ fontSize: '14px !important' }} />}
+              label={`${status.uploadSpeed != null ? status.uploadSpeed.toFixed(2) : '0.00'} Mb/s`}
+              sx={{ height: 20, color: 'var(--text-strong)', backgroundColor: 'rgba(56, 189, 248, 0.12)' }}
+            />
+            <Chip
+              size="small"
+              icon={<DownIcon sx={{ fontSize: '14px !important' }} />}
+              label={`${status.downloadSpeed != null ? status.downloadSpeed.toFixed(2) : '0.00'} Mb/s`}
+              sx={{ height: 20, color: 'var(--text-strong)', backgroundColor: 'rgba(245, 158, 11, 0.12)' }}
+            />
             {status.ping != null && (
               <Tooltip title="Latency">
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  <PingIcon sx={{
-                    fontSize: 14,
-                    color: status.ping < 300 ? 'var(--success)' : (status.ping < 800 ? 'var(--secondary)' : 'var(--error)')
-                  }} />
-                  <Typography variant="caption" sx={{
-                    color: status.ping < 300 ? 'var(--success)' : (status.ping < 800 ? 'var(--secondary)' : 'var(--error)'),
-                    fontWeight: 600,
-                    fontSize: '0.68rem',
-                  }}>
-                    {status.ping >= 0 ? `${status.ping} ms` : 'N/A'}
-                  </Typography>
-                </Box>
+                <Chip
+                  size="small"
+                  icon={<PingIcon sx={{ fontSize: '14px !important', color: pingColor }} />}
+                  label={`${status.ping >= 0 ? status.ping : 'N/A'} ms`}
+                  sx={{
+                    height: 20,
+                    color: pingColor,
+                    backgroundColor: 'rgba(148, 163, 184, 0.12)',
+                  }}
+                />
               </Tooltip>
             )}
           </Box>
         )}
 
         {isError && status.error && (
-          <Typography variant="caption" sx={{ color: 'var(--error)', maxWidth: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <Typography
+            variant="caption"
+            sx={{ color: 'var(--error)', maxWidth: 460, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+          >
             {status.error}
           </Typography>
         )}
@@ -154,17 +141,14 @@ export default function ConnectionBar() {
           size="small"
           variant="contained"
           color="error"
-          startIcon={<DisconnectIcon />}
+          startIcon={<DisconnectIcon sx={{ fontSize: 15 }} />}
           onClick={handleDisconnect}
           disabled={isDisconnecting || isConnecting}
           sx={{
-            borderRadius: 2,
-            textTransform: 'none',
-            px: 1.5,
+            px: 1.3,
             minHeight: 28,
             fontSize: '0.72rem',
-            boxShadow: 'none',
-            '&:hover': { boxShadow: '0 4px 12px rgba(239, 68, 68, 0.2)' }
+            whiteSpace: 'nowrap',
           }}
         >
           {isDisconnecting ? 'Wait...' : 'Disconnect'}
@@ -176,8 +160,8 @@ export default function ConnectionBar() {
           size="small"
           variant="outlined"
           color="error"
-          onClick={() => setStatus({ connected: false, state: 'disconnected' })} // Clear error
-          sx={{ ml: 2, textTransform: 'none' }}
+          onClick={() => setStatus({ connected: false, state: 'disconnected' })}
+          sx={{ textTransform: 'none', whiteSpace: 'nowrap' }}
         >
           Dismiss
         </Button>

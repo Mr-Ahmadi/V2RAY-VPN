@@ -1,6 +1,6 @@
 {
   "name": "v2ray-vpn",
-  "version": "0.1.0-beta.1",
+  "version": "0.2.0-beta.1",
   "description": "V2Ray VPN client with per-app routing support",
   "author": "V2Ray VPN Team",
   "main": "dist/main/main/index.js",
