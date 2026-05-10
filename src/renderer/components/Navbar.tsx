@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AppBar,
   Toolbar,
@@ -18,35 +18,48 @@ import {
   CropSquare as MaximizeIcon,
   FilterNone as RestoreIcon,
   Close as CloseIcon,
+  Shield as BridgeIcon,
 } from '@mui/icons-material';
 import LogViewer from './LogViewer';
 
-interface ConnectionStatus {
+interface VpnStatus {
   connected: boolean;
-  currentServer?: any;
+  state?: 'disconnected' | 'connecting' | 'connected' | 'disconnecting' | 'error';
+  currentServer?: { name?: string };
+}
+
+interface BridgeStatus {
+  running: boolean;
 }
 
 export default function Navbar() {
   const [anchorEl, setAnchorEl] = React.useState<null | HTMLElement>(null);
-  const [status, setStatus] = useState<ConnectionStatus>({ connected: false });
+  const [vpnStatus, setVpnStatus] = useState<VpnStatus>({ connected: false, state: 'disconnected' });
+  const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>({ running: false });
   const [logsOpen, setLogsOpen] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
   const [platform, setPlatform] = useState<string>('unknown');
 
-  useEffect(() => {
-    const checkStatus = async () => {
-      try {
-        const result = await window.electronAPI.v2ray.getStatus();
-        if (result.success) {
-          setStatus(result.data);
-        }
-      } catch (error) {
-        console.error('Error checking status:', error);
+  const checkStatus = async () => {
+    try {
+      const [vpnResult, bridgeResult] = await Promise.all([
+        window.electronAPI.v2ray.getStatus(),
+        window.electronAPI.bridge.getStatus(),
+      ]);
+      if (vpnResult?.success) {
+        setVpnStatus(vpnResult.data || { connected: false, state: 'disconnected' });
       }
-    };
+      if (bridgeResult?.success) {
+        setBridgeStatus({ running: bridgeResult.data?.running === true });
+      }
+    } catch (error) {
+      console.error('Error checking status:', error);
+    }
+  };
 
+  useEffect(() => {
     checkStatus();
-    const interval = setInterval(checkStatus, 3000);
+    const interval = setInterval(checkStatus, 2000);
     return () => clearInterval(interval);
   }, []);
 
@@ -88,12 +101,36 @@ export default function Navbar() {
     setAnchorEl(null);
   };
 
-  const handleDisconnect = async () => {
+  const handleDisconnectVpn = async () => {
     try {
       await window.electronAPI.v2ray.disconnect();
-      setStatus({ connected: false });
+      setVpnStatus({ connected: false, state: 'disconnected' });
     } catch (error) {
-      console.error('Disconnect error:', error);
+      console.error('Disconnect VPN error:', error);
+    }
+    handleMenuClose();
+  };
+
+  const handleDisconnectBridge = async () => {
+    try {
+      await window.electronAPI.bridge.stop();
+      setBridgeStatus({ running: false });
+    } catch (error) {
+      console.error('Disconnect Bridge error:', error);
+    }
+    handleMenuClose();
+  };
+
+  const handleDisconnectAll = async () => {
+    try {
+      await Promise.allSettled([
+        window.electronAPI.v2ray.disconnect(),
+        window.electronAPI.bridge.stop(),
+      ]);
+      setVpnStatus({ connected: false, state: 'disconnected' });
+      setBridgeStatus({ running: false });
+    } catch (error) {
+      console.error('Disconnect all error:', error);
     }
     handleMenuClose();
   };
@@ -126,6 +163,57 @@ export default function Navbar() {
   };
 
   const isMac = platform === 'darwin';
+  const vpnActive = vpnStatus.state === 'connected' || vpnStatus.state === 'connecting' || vpnStatus.state === 'disconnecting';
+  const bridgeActive = bridgeStatus.running === true;
+  const anyActive = vpnActive || bridgeActive;
+
+  const connectionChip = useMemo(() => {
+    if (vpnActive && bridgeActive) {
+      return {
+        label: 'V2Ray + Bridge Connected',
+        icon: <VpnIcon sx={{ fontSize: 14 }} />,
+        sx: {
+          backgroundColor: 'rgba(20, 184, 166, 0.16)',
+          color: 'var(--primary)',
+          border: '1px solid rgba(20, 184, 166, 0.26)',
+        },
+      };
+    }
+
+    if (vpnActive) {
+      return {
+        label: vpnStatus.currentServer?.name ? `V2Ray: ${vpnStatus.currentServer.name}` : 'V2Ray Connected',
+        icon: <VpnIcon sx={{ fontSize: 14 }} />,
+        sx: {
+          backgroundColor: 'rgba(56, 189, 248, 0.16)',
+          color: 'var(--accent)',
+          border: '1px solid rgba(56, 189, 248, 0.28)',
+        },
+      };
+    }
+
+    if (bridgeActive) {
+      return {
+        label: 'Bridge On',
+        icon: <BridgeIcon sx={{ fontSize: 12 }} />,
+        sx: {
+          backgroundColor: 'rgba(34, 197, 94, 0.16)',
+          color: 'var(--success)',
+          border: '1px solid rgba(34, 197, 94, 0.28)',
+        },
+      };
+    }
+
+    return {
+      label: 'Disconnected',
+      icon: null,
+      sx: {
+        backgroundColor: 'rgba(148, 163, 184, 0.14)',
+        color: 'var(--text-secondary)',
+        border: '1px solid rgba(148, 163, 184, 0.2)',
+      },
+    };
+  }, [bridgeActive, vpnActive, vpnStatus.currentServer?.name]);
 
   const macWindowControls = (
     <Box
@@ -246,15 +334,15 @@ export default function Navbar() {
         sx={{
           top: 0,
           zIndex: theme => theme.zIndex.drawer + 2,
-          background: 'linear-gradient(90deg, rgba(13, 21, 30, 0.96) 0%, rgba(16, 26, 38, 0.94) 100%)',
-          backdropFilter: 'blur(12px)',
-          WebkitBackdropFilter: 'blur(12px)',
-          borderBottom: '1px solid var(--border-light)',
-          boxShadow: '0 8px 24px rgba(2, 8, 23, 0.28)',
+          background: 'linear-gradient(90deg, rgba(10, 16, 24, 0.97) 0%, rgba(14, 23, 34, 0.95) 100%)',
+          backdropFilter: 'blur(14px)',
+          WebkitBackdropFilter: 'blur(14px)',
+          borderBottom: '1px solid rgba(78, 188, 255, 0.16)',
+          boxShadow: '0 7px 20px rgba(2, 8, 18, 0.4)',
           WebkitAppRegion: 'drag',
         }}
       >
-        <Toolbar sx={{ minHeight: { xs: 36, sm: 40 }, px: { xs: 0.75, sm: 1 }, gap: 0.75 }}>
+        <Toolbar sx={{ minHeight: { xs: 33, sm: 37 }, px: { xs: 0.7, sm: 1 }, gap: 0.65 }}>
           {isMac && macWindowControls}
 
           <Typography
@@ -262,9 +350,9 @@ export default function Navbar() {
             sx={{
               flexGrow: 1,
               fontWeight: 700,
-              letterSpacing: 0.2,
-              fontSize: { xs: '0.9rem', sm: '0.97rem' },
-              background: 'linear-gradient(90deg, var(--primary), var(--accent))',
+              letterSpacing: 0.28,
+              fontSize: { xs: '0.84rem', sm: '0.91rem' },
+              background: 'linear-gradient(90deg, #6ce6cc, #6ac9ff 62%, #f5be6d 100%)',
               backgroundClip: 'text',
               WebkitBackgroundClip: 'text',
               WebkitTextFillColor: 'transparent',
@@ -280,50 +368,49 @@ export default function Navbar() {
                 size="small"
                 sx={{
                   color: 'var(--text-secondary)',
-                  border: '1px solid rgba(148, 163, 184, 0.2)',
-                  p: 0.55,
-                  '&:hover': { backgroundColor: 'rgba(56, 189, 248, 0.1)', color: 'var(--accent)' },
+                  border: '1px solid rgba(148, 163, 184, 0.28)',
+                  p: 0.5,
+                  '&:hover': { backgroundColor: 'rgba(78, 188, 255, 0.12)', color: 'var(--accent)' },
                 }}
               >
                 <BugIcon sx={{ fontSize: 16 }} />
               </IconButton>
             </Tooltip>
 
-            {!status.connected && (
-              <Chip
-                label="Disconnected"
-                size="small"
-                sx={{
-                  height: 20,
-                  fontSize: '0.68rem',
-                  backgroundColor: 'rgba(148, 163, 184, 0.14)',
-                  color: 'var(--text-secondary)',
-                  border: '1px solid rgba(148, 163, 184, 0.2)',
-                }}
-              />
-            )}
-
-            {status.connected && (
-              <>
-                <Box sx={{ mr: 0.5, display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  <VpnIcon sx={{ color: 'var(--success)', fontSize: 15 }} />
-                  <Chip
-                    label={status.currentServer?.name || 'Connected'}
-                    size="small"
-                    sx={{
-                      height: 20,
-                      fontSize: '0.68rem',
-                      maxWidth: 180,
-                      '& .MuiChip-label': {
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
+            <Chip
+              icon={connectionChip.icon || undefined}
+              label={connectionChip.label}
+              size="small"
+              sx={{
+                height: bridgeActive && !vpnActive ? 21 : 19,
+                fontSize: bridgeActive && !vpnActive ? '0.66rem' : '0.62rem',
+                maxWidth: 190,
+                '& .MuiChip-icon': {
+                  ml: 0.55,
+                  mr: -0.25,
+                },
+                '& .MuiChip-label': {
+                  px: 0.7,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                },
+                ...(bridgeActive && !vpnActive
+                  ? {
+                      '& .MuiChip-icon': {
+                        fontSize: '11px !important',
+                        width: 11,
+                        height: 11,
+                        ml: 0.55,
+                        mr: -0.3,
                       },
-                      backgroundColor: 'rgba(34, 197, 94, 0.14)',
-                      color: 'var(--success)',
-                      border: '1px solid rgba(34, 197, 94, 0.25)',
-                    }}
-                  />
-                </Box>
+                    }
+                  : {}),
+                ...connectionChip.sx,
+              }}
+            />
+
+            {anyActive && (
+              <>
                 <IconButton
                   id="menu-button"
                   onClick={handleMenuOpen}
@@ -351,8 +438,14 @@ export default function Navbar() {
                     },
                   }}
                 >
-                  <MenuItem onClick={handleDisconnect} sx={{ color: '#ef4444' }}>
-                    Disconnect VPN
+                  <MenuItem onClick={handleDisconnectVpn} disabled={!vpnActive}>
+                    Disconnect V2Ray
+                  </MenuItem>
+                  <MenuItem onClick={handleDisconnectBridge} disabled={!bridgeActive}>
+                    Disconnect Bridge
+                  </MenuItem>
+                  <MenuItem onClick={handleDisconnectAll} sx={{ color: '#ef4444' }}>
+                    Disconnect All
                   </MenuItem>
                 </Menu>
               </>

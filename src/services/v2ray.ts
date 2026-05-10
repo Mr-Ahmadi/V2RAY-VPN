@@ -64,6 +64,7 @@ export class V2RayService {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempts = 0;
   private lastConnectedServerId: string | null = null;
+  private proxyCleanupTask: Promise<void> | null = null;
 
   private normalizeDomainList(values: unknown): string[] {
     if (!Array.isArray(values)) return [];
@@ -268,6 +269,33 @@ export class V2RayService {
     return plan;
   }
 
+  private startProxyCleanupTask(): Promise<void> {
+    if (!this.proxyCleanupTask) {
+      const cleanupStartTime = Date.now();
+      const task = (async () => {
+        try {
+          await systemProxyManager.disableSystemProxy();
+          const elapsed = Date.now() - cleanupStartTime;
+          console.log(`[V2RayService] Proxy cleanup completed in ${elapsed}ms`);
+        } catch (error) {
+          console.error('[V2RayService] Proxy cleanup failed:', error);
+          throw error;
+        }
+      })();
+      this.proxyCleanupTask = task.finally(() => {
+        if (this.proxyCleanupTask === task) {
+          this.proxyCleanupTask = null;
+        }
+      });
+    }
+    return this.proxyCleanupTask;
+  }
+
+  private async waitForPendingProxyCleanup(): Promise<void> {
+    if (!this.proxyCleanupTask) return;
+    await this.proxyCleanupTask;
+  }
+
   constructor() {
     let userDataPath = process.cwd();
     try {
@@ -349,6 +377,8 @@ export class V2RayService {
     this.ignoreNextProcessExit = false;
 
     try {
+      await this.waitForPendingProxyCleanup();
+
       // Ensure v2ray binary is executable (important after packaging)
       this.ensureV2RayExecutable();
 
@@ -376,7 +406,7 @@ export class V2RayService {
       // Stop existing connection
       if (this.v2rayProcess) {
         console.log('[V2RayService] Stopping existing V2Ray process...');
-        await this.disconnect();
+        await this.disconnect(true, { waitForProxyCleanup: true });
       }
 
       // Get settings for routing
@@ -443,17 +473,6 @@ export class V2RayService {
       console.log('[V2RayService] V2Ray core path:', this.v2rayCorePath);
       console.log('[V2RayService] Config file:', this.configPath);
 
-      // Kill any existing processes that might be using the proxy ports
-      try {
-        const { execSync } = require('child_process');
-        console.log('[V2RayService] Cleaning up any existing V2Ray processes...');
-        execSync('pkill -f "v2ray.*run" 2>/dev/null || true', { stdio: 'ignore' });
-        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for ports to be released
-        console.log('[V2RayService] Cleaned up any existing V2Ray processes');
-      } catch (e) {
-        console.warn('[V2RayService] Could not clean up existing processes (this is ok)');
-      }
-
       this.v2rayProcess = spawn(this.v2rayCorePath, ['run', '-c', this.configPath], {
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: false,
@@ -508,8 +527,15 @@ export class V2RayService {
 
       // Wait for V2Ray to fully start and be ready to accept connections
       console.log('[V2RayService] Waiting for V2Ray to start...');
+      const readyStartTime = Date.now();
       await this.waitForV2RayReady(connectionTimeoutMs);
-      console.log('[V2RayService] V2Ray is ready');
+      const readyTime = Date.now() - readyStartTime;
+      console.log(`[V2RayService] V2Ray is ready (took ${readyTime}ms)`);
+
+      // Update status immediately so UI shows connected
+      this.connectionStatus.connected = true;
+      this.connectionStatus.state = 'connected';
+      this.connectionStatus.currentServer = server;
 
       // Decide proxy activation based on routing mode
       console.log('[V2RayService] Setting up proxy with mode:', proxyMode);
@@ -537,8 +563,8 @@ export class V2RayService {
         }
       } else {
         console.log('[V2RayService] Full mode: enabling system proxy globally');
-        await systemProxyManager.enableSystemProxy();
-        console.log('[V2RayService] System proxy enabled successfully');
+        // Start proxy setup in background - don't block connection
+        void this.setupSystemProxyAsync('full');
       }
 
       // Reset status
@@ -551,7 +577,7 @@ export class V2RayService {
         downloadSpeed: 0,
         upTotal: 0,
         downTotal: 0,
-        ping: 0,
+        ping: undefined,
       };
 
       // Reset stats tracking
@@ -565,22 +591,11 @@ export class V2RayService {
       // Start stats polling
       this.startStatsPolling();
 
-      // Launcher-based split tunneling for apps that don't honor system proxy
-      await this.applyLauncherSplitTunnel(proxyMode, appRoutingRules, settings);
-      await this.verifyRoutingAtSystemLevel(proxyMode, appRoutingRules);
-
-      // Log connection
-      await runAsync(
-        `INSERT INTO connection_logs (serverId, connectedAt) VALUES (?, ?)`,
-        [serverId, new Date().toISOString()]
-      );
       this.lastConnectedServerId = serverId;
       this.reconnectAttempts = 0;
-      try {
-        await this.saveSettings({ lastConnectedServerId: serverId });
-      } catch (settingsError) {
-        console.warn('[V2RayService] Could not persist lastConnectedServerId:', settingsError);
-      }
+
+      // Non-critical tasks run in background so UI reports "Connected" faster.
+      void this.runPostConnectTasks(proxyMode, appRoutingRules, settings, serverId);
 
       const connectionTime = Date.now() - startTime;
       console.log('[V2RayService] ========== CONNECTION SUCCESS ==========');
@@ -632,14 +647,47 @@ export class V2RayService {
     }
   }
 
-  async disconnect(updateStatus = true): Promise<{ success: boolean; error?: string }> {
+  private async setupSystemProxyAsync(mode: 'full'): Promise<void> {
+    const startTime = Date.now();
+    try {
+      console.log(`[V2RayService] Setting up system proxy (${mode} mode)...`);
+      
+      if (process.platform === 'darwin') {
+        // macOS: Use SOCKS proxy (same as Swift Shade app)
+        await systemProxyManager.enableSocksProxy({ host: '127.0.0.1', port: 10808 });
+      } else {
+        await systemProxyManager.enableSystemProxy();
+      }
+      
+      const elapsed = Date.now() - startTime;
+      console.log(`[V2RayService] System proxy enabled successfully (took ${elapsed}ms)`);
+    } catch (error) {
+      const elapsed = Date.now() - startTime;
+      console.error(`[V2RayService] Failed to enable system proxy after ${elapsed}ms:`, error);
+      // Don't throw - connection is still working, just proxy setup failed
+      // User can manually configure proxy or retry
+      debugLogger.error('V2RayService', 'System proxy setup failed', { error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  async disconnect(
+    updateStatus = true,
+    options: { waitForProxyCleanup?: boolean } = {},
+  ): Promise<{ success: boolean; error?: string }> {
+    const startTime = Date.now();
     try {
       debugLogger.info('V2RayService', 'Disconnecting...');
       this.clearReconnectTimer();
       this.reconnectAttempts = 0;
+      const waitForProxyCleanup = options.waitForProxyCleanup === true;
 
       if (updateStatus) {
         this.connectionStatus.state = 'disconnecting';
+        // Update UI immediately
+        this.connectionStatus = {
+          connected: false,
+          state: 'disconnecting'
+        };
       }
 
       this.stopStatsPolling();
@@ -648,6 +696,7 @@ export class V2RayService {
       const hadProcess = Boolean(this.v2rayProcess);
       if (this.v2rayProcess) {
         this.ignoreNextProcessExit = true;
+        console.log('[V2RayService] Killing V2Ray process...');
         try {
           this.v2rayProcess.kill('SIGTERM');
         } catch (e) { /* ignore */ }
@@ -657,9 +706,7 @@ export class V2RayService {
         this.ignoreNextProcessExit = false;
       }
 
-      // Cleanup system proxy
-      await systemProxyManager.disableSystemProxy();
-
+      // Start proxy cleanup in background
       if (updateStatus) {
         this.connectionStatus = {
           connected: false,
@@ -667,7 +714,22 @@ export class V2RayService {
         };
       }
 
-      debugLogger.info('V2RayService', 'Disconnected successfully');
+      console.log('[V2RayService] Starting proxy cleanup...');
+      const cleanupTask = this.startProxyCleanupTask();
+
+      if (waitForProxyCleanup) {
+        await cleanupTask;
+      } else {
+        void cleanupTask.catch((error: any) => {
+          debugLogger.warn('V2RayService', 'Async proxy cleanup failed after disconnect', {
+            error: error?.message || String(error),
+          });
+        });
+      }
+
+      const elapsed = Date.now() - startTime;
+      console.log(`[V2RayService] Disconnected successfully (took ${elapsed}ms)`);
+      debugLogger.info('V2RayService', 'Disconnected successfully', { elapsed });
       if (hadProcess) {
         setTimeout(() => {
           this.ignoreNextProcessExit = false;
@@ -1209,6 +1271,46 @@ export class V2RayService {
     return settings;
   }
 
+  async applySystemDnsFromSettings(settingsOverride: Record<string, any> = {}): Promise<{
+    dnsServers: string[];
+    appliedServices: string[];
+    failedServices: string[];
+  }> {
+    const savedSettings = await this.getSettings();
+    const effectiveSettings = { ...savedSettings, ...(settingsOverride || {}) };
+    const dnsServers = this.buildDnsServers(effectiveSettings)
+      .map((entry) => String(entry?.address || '').trim())
+      .filter(Boolean);
+
+    if (dnsServers.length === 0) {
+      throw new Error('No DNS servers resolved from current settings');
+    }
+
+    const result = await systemProxyManager.setSystemDnsServers(dnsServers);
+    return {
+      dnsServers: result.dnsServers,
+      appliedServices: result.appliedServices,
+      failedServices: result.failedServices,
+    };
+  }
+
+  async clearSystemDns(): Promise<{
+    clearedServices: string[];
+    failedServices: string[];
+  }> {
+    const result = await systemProxyManager.clearSystemDnsServers();
+    return {
+      clearedServices: result.clearedServices,
+      failedServices: result.failedServices,
+    };
+  }
+
+  async getSystemDns(): Promise<{
+    services: Array<{ service: string; dnsServers: string[]; isAutomatic: boolean }>;
+  }> {
+    return systemProxyManager.getSystemDnsServers();
+  }
+
   async saveSettings(settings: Record<string, any>): Promise<void> {
     for (const [key, value] of Object.entries(settings)) {
       await runAsync(
@@ -1376,6 +1478,7 @@ export class V2RayService {
         const security = server.config.security || 'none';
         const wsPath = server.config.path || '/';
         const wsHost = typeof server.config.host === 'string' ? server.config.host.trim() : '';
+        const tcpHeaderType = String(server.config.headerType || 'none').toLowerCase() === 'http' ? 'http' : 'none';
         const streamSettings: any = {
           network,
           security,
@@ -1418,7 +1521,7 @@ export class V2RayService {
         } else if (network === 'tcp') {
           streamSettings.tcpSettings = {
             header: {
-              type: 'none',
+              type: tcpHeaderType,
             },
           };
         }
@@ -1460,16 +1563,30 @@ export class V2RayService {
 
       case 'vmess': {
         const network = server.config.type || 'tcp';
-        const security = server.config.security || 'none';
+        const vmessSecurityRaw = String(server.config.security || '').trim().toLowerCase();
+        const vmessCipherWhitelist = new Set([
+          'auto',
+          'none',
+          'zero',
+          'aes-128-gcm',
+          'chacha20-poly1305',
+          'aes-128-cfb',
+          'aes-128-ctr',
+          'chacha20-ietf-poly1305',
+        ]);
+        const vmessCipher = vmessCipherWhitelist.has(vmessSecurityRaw) ? vmessSecurityRaw : 'auto';
+        const streamSecurityRaw = String(server.config.streamSecurity || '').trim().toLowerCase();
+        const tlsFlag = String(server.config.tls || '').trim().toLowerCase();
+        const usesTls = streamSecurityRaw === 'tls' || tlsFlag === 'tls' || vmessSecurityRaw === 'tls';
         const wsPath = server.config.path || '/';
         const wsHost = typeof server.config.host === 'string' ? server.config.host.trim() : '';
+        const tcpHeaderType = String(server.config.headerType || server.config.obfsSettings || 'none').toLowerCase() === 'http' ? 'http' : 'none';
         const streamSettings: any = {
           network,
-          security,
+          security: usesTls ? 'tls' : 'none',
         };
 
-        if (security === 'tls' || server.config.tls === 'tls') {
-          streamSettings.security = 'tls';
+        if (usesTls) {
           streamSettings.tlsSettings = {
             serverName: server.config.sni || server.config.host || server.address,
             allowInsecure: globalAllowInsecure || this.normalizeBooleanFlag(server.config.allowInsecure),
@@ -1496,7 +1613,7 @@ export class V2RayService {
         } else if (network === 'tcp') {
           streamSettings.tcpSettings = {
             header: {
-              type: 'none',
+              type: tcpHeaderType,
             },
           };
         }
@@ -1513,7 +1630,7 @@ export class V2RayService {
                   {
                     id: server.config.id,
                     alterId: Number(server.config.alterId) || 0,
-                    security: server.config.security || 'auto',
+                    security: vmessCipher,
                   },
                 ],
               },
@@ -1616,7 +1733,41 @@ export class V2RayService {
   }
 
   async stop(): Promise<void> {
-    await this.disconnect();
+    await this.disconnect(true, { waitForProxyCleanup: true });
+  }
+
+  private async runPostConnectTasks(
+    proxyMode: string,
+    appRoutingRules: AppRoutingRule[],
+    settings: Record<string, any>,
+    serverId: string,
+  ): Promise<void> {
+    try {
+      await this.applyLauncherSplitTunnel(proxyMode, appRoutingRules, settings);
+    } catch (error) {
+      console.warn('[V2RayService] Post-connect app routing task failed:', error);
+    }
+
+    try {
+      await this.verifyRoutingAtSystemLevel(proxyMode, appRoutingRules);
+    } catch (error) {
+      console.warn('[V2RayService] Post-connect verification task failed:', error);
+    }
+
+    try {
+      await runAsync(
+        `INSERT INTO connection_logs (serverId, connectedAt) VALUES (?, ?)`,
+        [serverId, new Date().toISOString()]
+      );
+    } catch (error) {
+      console.warn('[V2RayService] Could not write connection log:', error);
+    }
+
+    try {
+      await this.saveSettings({ lastConnectedServerId: serverId });
+    } catch (settingsError) {
+      console.warn('[V2RayService] Could not persist lastConnectedServerId:', settingsError);
+    }
   }
 
   private startStatsPolling(): void {
@@ -1951,38 +2102,38 @@ export class V2RayService {
   }
 
   private async waitForV2RayReady(timeoutMs: number = 10000): Promise<void> {
-    // Wait for V2Ray to be ready by checking if the proxy ports are accepting connections
-    console.log('[V2RayService] Waiting for V2Ray proxy ports to open...');
+    // Fast connection check - just verify SOCKS port is accepting connections
+    // This matches the Swift Shade app approach: simple, fast, reliable
+    console.log('[V2RayService] Checking if SOCKS proxy port is ready...');
     const safeTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 10000;
-    const delayMs = 200;
+    const delayMs = 100; // Check every 100ms (faster polling)
     const maxAttempts = Math.max(1, Math.floor(safeTimeoutMs / delayMs));
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
-        // Check both SOCKS and HTTP proxy ports
+        // Only check SOCKS port - it's the primary proxy
         const socksReady = await this.checkProxyPort(10808);
-        const httpReady = await this.checkProxyPort(10809);
 
-        if (socksReady && httpReady) {
+        if (socksReady) {
           console.log(`[V2RayService] Proxy ports open after ${attempt * delayMs}ms`);
-
-          // Additional verification: try to make a simple connection through the SOCKS proxy
-          console.log('[V2RayService] Testing SOCKS connection...');
-          const socksWorks = await this.testSOCKSConnection();
-          if (socksWorks) {
-            console.log('[V2RayService] ✓ SOCKS proxy connection verified - V2Ray is ready');
-            return;
-          } else {
-            console.warn('[V2RayService] SOCKS port open but connection test failed, retrying...');
-          }
+          // Port is open - that's enough to consider V2Ray ready
+          return;
         }
       } catch (error) {
         // Port not ready yet
       }
-      await new Promise(resolve => setTimeout(resolve, delayMs));
+      
+      // Only wait if we're going to try again
+      if (attempt < maxAttempts - 1) {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
     }
 
-    console.warn(`[V2RayService] ⚠ V2Ray may not be fully ready after ${safeTimeoutMs}ms, but proceeding anyway`);
+    // If we get here, port didn't open in time
+    throw new Error(
+      `V2Ray proxy port (10808) did not open within ${safeTimeoutMs}ms. ` +
+      'The V2Ray process may have failed to start. Check the logs for errors.'
+    );
   }
 
   private async testSOCKSConnection(): Promise<boolean> {
@@ -2038,7 +2189,7 @@ export class V2RayService {
     return new Promise((resolve) => {
       const socket = new net.Socket();
 
-      socket.setTimeout(1000);
+      socket.setTimeout(500); // Faster timeout - 500ms is enough
 
       socket.on('connect', () => {
         socket.destroy();

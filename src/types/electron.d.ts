@@ -39,6 +39,9 @@ declare global {
         get: () => Promise<any>;
         save: (settings: any) => Promise<any>;
         togglePing: (enable: boolean) => Promise<any>;
+        applySystemDns: (settings?: any) => Promise<any>;
+        clearSystemDns: () => Promise<any>;
+        getSystemDns: () => Promise<any>;
       };
       debug: {
         getLogs: (filter?: any) => Promise<any>;
@@ -51,6 +54,17 @@ declare global {
         checkGithub: (opts?: { owner?: string; repo?: string }) => Promise<any>;
         openGithubRelease: (url?: string) => Promise<any>;
         downloadAndInstallGithub: (opts?: { owner?: string; repo?: string }) => Promise<any>;
+      };
+      bridge: {
+        configure: (payload: Record<string, unknown>) => Promise<any>;
+        start: () => Promise<any>;
+        stop: () => Promise<any>;
+        scanGoogleIps: (frontDomain?: string) => Promise<any>;
+        getStatus: () => Promise<any>;
+        getCodeTemplate: (authKey?: string) => Promise<any>;
+        getRuntimeDiagnostics: () => Promise<any>;
+        setupRuntime: (opts?: { includeOptional?: boolean }) => Promise<any>;
+        ensureCaFiles: () => Promise<any>;
       };
       window: {
         minimize: () => Promise<{ success: boolean; error?: string }>;
@@ -65,3 +79,7 @@ declare global {
 }
 
 export { };
+
+declare module 'uuid' {
+  export function v4(): string;
+}

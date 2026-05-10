@@ -10,6 +10,8 @@ import debugLogger from '../services/debugLogger';
 import { ServerManager } from '../services/serverManager';
 import { UriImportService } from '../services/import/UriImportService';
 import { SubscriptionManager } from '../services/subscriptionManager';
+import BridgeService from '../services/bridge/BridgeService';
+import systemProxyManager from '../services/systemProxyManager';
 
 // Handle EPIPE errors (when stdout/stderr pipe closes)
 // This prevents the application from crashing if the console output pipe is broken
@@ -200,6 +202,7 @@ let v2rayService: V2RayService;
 let appRoutingService: AppRoutingService;
 let subscriptionManager: SubscriptionManager;
 let uriImportService: UriImportService;
+let bridgeService: BridgeService;
 
 const triggerAutoConnectIfEnabled = async () => {
   if (!v2rayService) return;
@@ -420,6 +423,7 @@ app.on('ready', async () => {
     console.log('[Main] Initializing import/subscription services...');
     uriImportService = new UriImportService(new ServerManager());
     subscriptionManager = new SubscriptionManager();
+    bridgeService = new BridgeService();
     console.log('[Main] Import/subscription services initialized successfully');
 
     // Setup IPC handlers BEFORE creating window
@@ -456,6 +460,12 @@ app.on('before-quit', async () => {
   // Only disconnect VPN when app is actually quitting
   if (v2rayService) {
     await v2rayService.stop();
+  }
+
+  if (bridgeService) {
+    await bridgeService.stop().catch((error) => {
+      console.warn('[Main] Failed to stop Shade bridge during quit:', error);
+    });
   }
 });
 
@@ -1105,6 +1115,35 @@ const setupIPCHandlers = () => {
     }
   });
 
+  ipcMain.handle('settings:applySystemDns', async (_: any, settingsOverride?: Record<string, any>) => {
+    try {
+      if (!v2rayService) throw new Error('V2Ray service not initialized');
+      const data = await v2rayService.applySystemDnsFromSettings(settingsOverride || {});
+      return { success: true, data };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('settings:clearSystemDns', async () => {
+    try {
+      if (!v2rayService) throw new Error('V2Ray service not initialized');
+      const data = await v2rayService.clearSystemDns();
+      return { success: true, data };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('settings:getSystemDns', async () => {
+    try {
+      const data = await systemProxyManager.getSystemDnsServers();
+      return { success: true, data };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
   // Debug logger handlers
   ipcMain.handle('debug:getLogs', async (_: any, filter?: any) => {
     try {
@@ -1139,6 +1178,98 @@ const setupIPCHandlers = () => {
     try {
       const filePath = debugLogger.getLogFilePath();
       return { success: true, data: filePath };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('bridge:configure', async (_: any, payload: Record<string, unknown>) => {
+    try {
+      if (!bridgeService) throw new Error('Shade service not initialized');
+      const data = await bridgeService.configure(payload || {});
+      return { success: true, data };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('bridge:start', async () => {
+    try {
+      if (!bridgeService) throw new Error('Shade service not initialized');
+      process.env.BRIDGE_USER_DATA_PATH = app.getPath('userData');
+      const data = await bridgeService.start();
+      return { success: true, data };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('bridge:stop', async () => {
+    try {
+      if (!bridgeService) throw new Error('Shade service not initialized');
+      await bridgeService.stop();
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('bridge:scanGoogleIps', async (_: any, frontDomain?: string) => {
+    try {
+      if (!bridgeService) throw new Error('Shade service not initialized');
+      const data = await bridgeService.scan(frontDomain);
+      return { success: true, data };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('bridge:getStatus', async () => {
+    try {
+      if (!bridgeService) throw new Error('Shade service not initialized');
+      return { success: true, data: bridgeService.getStatus() };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('bridge:getCodeTemplate', async (_: any, authKey?: string) => {
+    try {
+      if (!bridgeService) throw new Error('Shade service not initialized');
+      const data = bridgeService.getAppsScriptCode(authKey);
+      return { success: true, data };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('bridge:getRuntimeDiagnostics', async () => {
+    try {
+      if (!bridgeService) throw new Error('Shade service not initialized');
+      process.env.BRIDGE_USER_DATA_PATH = app.getPath('userData');
+      return { success: true, data: bridgeService.getRuntimeDiagnostics() };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('bridge:ensureCaFiles', async () => {
+    try {
+      if (!bridgeService) throw new Error('Shade service not initialized');
+      process.env.BRIDGE_USER_DATA_PATH = app.getPath('userData');
+      const data = bridgeService.ensureCaFiles();
+      return { success: true, data };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('bridge:setupRuntime', async (_: any, opts?: { includeOptional?: boolean }) => {
+    try {
+      if (!bridgeService) throw new Error('Shade service not initialized');
+      const includeOptional = opts?.includeOptional !== false;
+      const data = bridgeService.setupRuntimeDependencies(includeOptional);
+      return { success: true, data };
     } catch (error: any) {
       return { success: false, error: error.message };
     }

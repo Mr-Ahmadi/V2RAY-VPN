@@ -11,7 +11,8 @@
     "dist/main",
     "dist/package.json",
     "build",
-    "v2ray-core"
+    "v2ray-core",
+    "bridge-core"
   ],
   "asar": {
     "smartUnpack": true
@@ -19,7 +20,8 @@
   "asarUnpack": [
     "dist/main/preload.js",
     "v2ray-core/**/*",
-    "build/**/*"
+    "build/**/*",
+    "bridge-core/**/*"
   ],
   "extraMetadata": {
     "main": "dist/main/main/index.js"

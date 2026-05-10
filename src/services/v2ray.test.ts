@@ -309,6 +309,60 @@ describe('V2RayService - Routing Rules', () => {
       });
     });
 
+    test('should normalize vmess user cipher when legacy security field is tls', async () => {
+      const config = await (service as any).generateV2RayConfig(
+        {
+          id: 'vmess-server',
+          name: 'VMess Legacy TLS',
+          protocol: 'vmess',
+          address: 'vmess.example.com',
+          port: 443,
+          config: {
+            id: 'e5a85c61-f94e-43ef-a2d2-e3256814ec52',
+            alterId: 0,
+            security: 'tls',
+            tls: 'tls',
+            type: 'ws',
+            path: '/ws',
+          },
+        },
+        'full',
+        [],
+        { blockAds: false }
+      );
+
+      expect(config.outbounds[0].protocol).toBe('vmess');
+      expect(config.outbounds[0].settings.vnext[0].users[0].security).toBe('auto');
+      expect(config.outbounds[0].streamSettings.security).toBe('tls');
+      expect(config.outbounds[0].streamSettings.tlsSettings).toBeDefined();
+    });
+
+    test('should keep vmess tcp http header when headerType is http', async () => {
+      const config = await (service as any).generateV2RayConfig(
+        {
+          id: 'vmess-http-obfs',
+          name: 'VMess TCP HTTP',
+          protocol: 'vmess',
+          address: 'vmess.example.com',
+          port: 80,
+          config: {
+            id: '3f8253cf-564b-4128-b2cf-c4ef5ad1c578',
+            alterId: 0,
+            security: 'auto',
+            type: 'tcp',
+            headerType: 'http',
+          },
+        },
+        'full',
+        [],
+        { blockAds: false }
+      );
+
+      expect(config.outbounds[0].streamSettings.tcpSettings).toEqual({
+        header: { type: 'http' },
+      });
+    });
+
     test('should set domainStrategy to IPIfNonMatch', async () => {
       const config = await (service as any).generateV2RayConfig(
         {

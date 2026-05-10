@@ -313,6 +313,7 @@ export const runAsync = (query: string, params: any[] = []): Promise<any> => {
           const tableName = insertOrReplaceMatch[1];
           const columns = insertOrReplaceMatch[2].split(',').map(c => c.trim());
           const table = getMemoryTable(tableName);
+          const persist = () => saveMemoryStorage();
 
           // Create object with column-value pairs
           const row: any = {};
@@ -326,6 +327,7 @@ export const runAsync = (query: string, params: any[] = []): Promise<any> => {
             if (existingIndex !== -1) {
               table[existingIndex] = { ...table[existingIndex], ...row };
               console.log(`[Database] Replaced in ${tableName} id: ${row.id}`);
+              persist();
               return { changes: 1 };
             }
           } else if (row.key) {
@@ -334,6 +336,7 @@ export const runAsync = (query: string, params: any[] = []): Promise<any> => {
             if (existingIndex !== -1) {
               table[existingIndex] = { ...table[existingIndex], ...row };
               console.log(`[Database] Replaced in ${tableName} key: ${row.key}`);
+              persist();
               return { changes: 1 };
             }
           } else if (row.appPath) {
@@ -342,6 +345,7 @@ export const runAsync = (query: string, params: any[] = []): Promise<any> => {
             if (existingIndex !== -1) {
               table[existingIndex] = { ...table[existingIndex], ...row };
               console.log(`[Database] Replaced in ${tableName} appPath: ${row.appPath}`);
+              persist();
               return { changes: 1 };
             }
           }
@@ -349,6 +353,7 @@ export const runAsync = (query: string, params: any[] = []): Promise<any> => {
           // Add new record
           table.push(row);
           console.log(`[Database] Inserted into ${tableName}. Total records: ${table.length}. Row:`, row.id || row.key || '?');
+          persist();
           return { changes: 1, lastInsertRowid: table.length };
         }
 
@@ -367,6 +372,7 @@ export const runAsync = (query: string, params: any[] = []): Promise<any> => {
 
           table.push(row);
           console.log(`[Database] Inserted into ${tableName}. Total records: ${table.length}. Row id:`, row.id);
+          saveMemoryStorage();
           return { changes: 1, lastInsertRowid: table.length };
         }
 
@@ -396,6 +402,9 @@ export const runAsync = (query: string, params: any[] = []): Promise<any> => {
           }
 
           console.log(`[Database] Updated ${tableName}. Changes: ${updatedCount}`);
+          if (updatedCount > 0) {
+            saveMemoryStorage();
+          }
           return { changes: updatedCount };
         }
 
@@ -413,7 +422,11 @@ export const runAsync = (query: string, params: any[] = []): Promise<any> => {
             const filtered = table.filter(r => r.id !== idToDelete);
             memoryStorage[tableName] = filtered;
             console.log(`[Database] Deleted from ${tableName}. Records: ${initialLength} -> ${filtered.length}`);
-            return { changes: initialLength - filtered.length };
+            const changes = initialLength - filtered.length;
+            if (changes > 0) {
+              saveMemoryStorage();
+            }
+            return { changes };
           }
 
           const appPathMatch = whereClause.match(/appPath\s*=\s*\?/i);
@@ -423,7 +436,11 @@ export const runAsync = (query: string, params: any[] = []): Promise<any> => {
             const filtered = table.filter(r => r.appPath !== appPathToDelete);
             memoryStorage[tableName] = filtered;
             console.log(`[Database] Deleted from ${tableName} by appPath. Records: ${initialLength} -> ${filtered.length}`);
-            return { changes: initialLength - filtered.length };
+            const changes = initialLength - filtered.length;
+            if (changes > 0) {
+              saveMemoryStorage();
+            }
+            return { changes };
           }
 
           const keyMatch = whereClause.match(/key\s*=\s*\?/i);
@@ -433,7 +450,11 @@ export const runAsync = (query: string, params: any[] = []): Promise<any> => {
             const filtered = table.filter(r => r.key !== keyToDelete);
             memoryStorage[tableName] = filtered;
             console.log(`[Database] Deleted from ${tableName} by key. Records: ${initialLength} -> ${filtered.length}`);
-            return { changes: initialLength - filtered.length };
+            const changes = initialLength - filtered.length;
+            if (changes > 0) {
+              saveMemoryStorage();
+            }
+            return { changes };
           }
           return { changes: 0 };
         }

@@ -98,8 +98,9 @@ export class DebugLogger {
       filtered = filtered.filter(log => log.level === filter.level);
     }
 
-    if (filter?.source) {
-      filtered = filtered.filter(log => log.source.includes(filter.source));
+    const sourceFilter = filter?.source;
+    if (sourceFilter) {
+      filtered = filtered.filter(log => log.source.includes(sourceFilter));
     }
 
     if (filter?.since) {

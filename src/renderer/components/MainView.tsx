@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Box, Tabs, Tab, useMediaQuery, useTheme } from '@mui/material';
 import {
   Dns as ServersIcon,
+  Shield as ShadeIcon,
   Route as RoutingIcon,
   Settings as SettingsIcon,
 } from '@mui/icons-material';
@@ -9,11 +10,12 @@ import ConnectionBar from './ConnectionBar';
 import ServerManager from './ServerManager';
 import AppRouting from './AppRouting';
 import Settings from './Settings';
+import BridgePanel from './BridgePanel';
 
-const TAB_KEYS = ['servers', 'routing', 'settings'] as const;
+const TAB_KEYS = ['servers', 'routing', 'bridge', 'settings'] as const;
 type TabKey = typeof TAB_KEYS[number];
-const TAB_LABELS = ['Servers', 'Routing', 'Settings'] as const;
-const TAB_ICONS = [ServersIcon, RoutingIcon, SettingsIcon] as const;
+const TAB_LABELS = ['Servers', 'Routing', 'Bridge', 'Settings'] as const;
+const TAB_ICONS = [ServersIcon, RoutingIcon, ShadeIcon, SettingsIcon] as const;
 
 const getTabFromHash = (): number => {
   const hash = window.location.hash.replace(/^#/, '').toLowerCase() as TabKey;
@@ -38,7 +40,7 @@ function TabPanel(props: TabPanelProps) {
       aria-labelledby={`tab-${index}`}
       {...other}
     >
-      {value === index && <Box sx={{ p: 0 }}>{children}</Box>}
+      <Box sx={{ p: 0, display: value === index ? 'block' : 'none' }}>{children}</Box>
     </div>
   );
 }
@@ -70,72 +72,79 @@ export default function MainView() {
           position: 'sticky',
           top: 0,
           zIndex: 20,
-          background: 'linear-gradient(to bottom, rgba(9, 15, 20, 0.96), rgba(9, 15, 20, 0.84))',
-          backdropFilter: 'blur(10px)',
-          WebkitBackdropFilter: 'blur(10px)',
-          borderBottom: '1px solid rgba(56, 189, 248, 0.12)',
-          pb: 1,
+          background: 'linear-gradient(to bottom, rgba(7, 12, 19, 0.96), rgba(7, 12, 19, 0.84))',
+          backdropFilter: 'blur(12px)',
+          WebkitBackdropFilter: 'blur(12px)',
+          borderBottom: '1px solid rgba(78, 188, 255, 0.12)',
+          pb: 0.9,
         }}
       >
-        <ConnectionBar />
-        <Box sx={{ px: { xs: 1, sm: 1.5 }, pt: 0.75 }}>
-          <Tabs
-            value={value}
-            onChange={handleChange}
-            aria-label="main navigation"
-            variant={isMobile ? 'scrollable' : 'fullWidth'}
-            scrollButtons={isMobile ? 'auto' : false}
-            allowScrollButtonsMobile
-            sx={{
-              backgroundColor: 'rgba(16, 25, 35, 0.8)',
-              border: '1px solid var(--border-light)',
-              borderRadius: 2.5,
-              minHeight: 48,
-              p: 0.5,
-              '& .MuiTabs-scrollButtons': {
-                color: 'var(--text-secondary)',
-              },
-              '& .MuiTab-root': {
-                color: 'var(--text-secondary)',
-                minHeight: 38,
-                borderRadius: 1.75,
-                minWidth: isMobile ? 104 : 'auto',
-                px: { xs: 1, sm: 2 },
-                py: 0.25,
-                zIndex: 1,
-                transition: 'all 0.2s ease',
-                '&.Mui-selected': { color: 'var(--text-primary)' },
-                '& .MuiSvgIcon-root': {
-                  fontSize: 16,
+        <Box sx={{ width: '100%', maxWidth: 1120, mx: 'auto' }}>
+          <ConnectionBar />
+          <Box sx={{ px: { xs: 1, sm: 1.5 }, pt: 0.75 }}>
+            <Tabs
+              value={value}
+              onChange={handleChange}
+              aria-label="main navigation"
+              variant={isMobile ? 'scrollable' : 'fullWidth'}
+              scrollButtons={isMobile ? 'auto' : false}
+              allowScrollButtonsMobile
+              sx={{
+                background:
+                  'linear-gradient(180deg, rgba(16, 26, 38, 0.9), rgba(12, 19, 28, 0.85))',
+                border: '1px solid rgba(78, 188, 255, 0.2)',
+                borderRadius: 2.2,
+                minHeight: 42,
+                p: 0.35,
+                boxShadow: '0 10px 24px rgba(4, 10, 17, 0.35)',
+                '& .MuiTabs-scrollButtons': {
+                  color: 'var(--text-secondary)',
                 },
-              },
-              '& .MuiTabs-indicator': {
-                height: 'calc(100% - 8px)',
-                margin: '4px',
-                borderRadius: 1.75,
-                background: 'linear-gradient(90deg, rgba(20, 184, 166, 0.22), rgba(56, 189, 248, 0.2))',
-              },
-              '& .MuiTabs-flexContainer': { gap: 0.5 },
-            }}
-          >
-            {TAB_LABELS.map((label, index) => {
-              const Icon = TAB_ICONS[index];
-              return (
-                <Tab
-                  key={label}
-                  icon={<Icon />}
-                  iconPosition="start"
-                  label={label}
-                  id={`tab-${index}`}
-                  aria-controls={`tabpanel-${index}`}
-                />
-              );
-            })}
-          </Tabs>
+                '& .MuiTab-root': {
+                  color: 'var(--text-secondary)',
+                  minHeight: 33,
+                  borderRadius: 1.5,
+                  minWidth: isMobile ? 96 : 'auto',
+                  px: { xs: 0.9, sm: 1.6 },
+                  py: 0.2,
+                  zIndex: 1,
+                  transition: 'all 0.2s ease',
+                  fontSize: '0.77rem',
+                  '&.Mui-selected': { color: 'var(--text-primary)' },
+                  '& .MuiSvgIcon-root': {
+                    fontSize: 14.5,
+                  },
+                },
+                '& .MuiTabs-indicator': {
+                  height: 'calc(100% - 8px)',
+                  margin: '4px',
+                  borderRadius: 1.75,
+                  boxShadow: '0 8px 18px rgba(6, 13, 22, 0.35)',
+                  background:
+                    'linear-gradient(90deg, rgba(30, 200, 169, 0.26), rgba(78, 188, 255, 0.22))',
+                },
+                '& .MuiTabs-flexContainer': { gap: 0.45 },
+              }}
+            >
+              {TAB_LABELS.map((label, index) => {
+                const Icon = TAB_ICONS[index];
+                return (
+                  <Tab
+                    key={label}
+                    icon={<Icon />}
+                    iconPosition="start"
+                    label={label}
+                    id={`tab-${index}`}
+                    aria-controls={`tabpanel-${index}`}
+                  />
+                );
+              })}
+            </Tabs>
+          </Box>
         </Box>
       </Box>
 
-      <Box sx={{ px: { xs: 0.5, sm: 1 }, pb: 2.5, pt: 0.5 }}>
+      <Box sx={{ px: { xs: 0.5, sm: 1 }, pb: 2.25, pt: 0.45, width: '100%', maxWidth: 1120, mx: 'auto' }}>
         <TabPanel value={value} index={0}>
           <ServerManager />
         </TabPanel>
@@ -143,6 +152,9 @@ export default function MainView() {
           <AppRouting />
         </TabPanel>
         <TabPanel value={value} index={2}>
+          <BridgePanel />
+        </TabPanel>
+        <TabPanel value={value} index={3}>
           <Settings />
         </TabPanel>
       </Box>

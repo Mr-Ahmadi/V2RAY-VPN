@@ -172,15 +172,12 @@ export class UriImportService {
 
   private parseVmessUri(uri: string): ParsedServerInput {
     const encoded = uri.replace('vmess://', '').trim();
-    let decoded = '';
-
-    try {
-      decoded = Buffer.from(encoded, 'base64').toString('utf-8');
-    } catch {
-      // Try URL-safe variant.
-      const normalized = encoded.replace(/-/g, '+').replace(/_/g, '/');
-      decoded = Buffer.from(normalized, 'base64').toString('utf-8');
-    }
+    const normalized = encoded
+      .replace(/-/g, '+')
+      .replace(/_/g, '/')
+      .replace(/\s+/g, '');
+    const padding = normalized.length % 4 === 0 ? '' : '='.repeat(4 - (normalized.length % 4));
+    const decoded = Buffer.from(`${normalized}${padding}`, 'base64').toString('utf-8');
 
     const configJson = JSON.parse(decoded);
     const address = configJson.add || configJson.address;
@@ -191,6 +188,27 @@ export class UriImportService {
       throw new Error('Invalid VMess URI payload');
     }
 
+    const normalizedSecurity = String(configJson.scy || '').trim().toLowerCase();
+    const normalizedLegacySecurity = String(configJson.security || '').trim().toLowerCase();
+    const vmessCipherWhitelist = new Set([
+      'auto',
+      'none',
+      'zero',
+      'aes-128-gcm',
+      'chacha20-poly1305',
+      'aes-128-cfb',
+      'aes-128-ctr',
+      'chacha20-ietf-poly1305',
+    ]);
+    const resolvedCipher = vmessCipherWhitelist.has(normalizedSecurity)
+      ? normalizedSecurity
+      : vmessCipherWhitelist.has(normalizedLegacySecurity)
+        ? normalizedLegacySecurity
+        : 'auto';
+    const tlsMode = String(configJson.tls || '').trim().toLowerCase();
+    const legacyStreamSecurity = normalizedLegacySecurity === 'tls' ? 'tls' : 'none';
+    const streamSecurity = tlsMode === 'tls' ? 'tls' : legacyStreamSecurity;
+
     return {
       protocol: 'vmess',
       name: configJson.ps || configJson.name || `${address}:${port}`,
@@ -200,13 +218,23 @@ export class UriImportService {
       config: {
         id,
         alterId: Number(configJson.aid ?? configJson.alterId ?? 0),
-        security: configJson.scy || configJson.security || 'auto',
+        security: resolvedCipher,
         type: configJson.net || 'tcp',
+        headerType: configJson.type || 'none',
         path: configJson.path || '',
         host: configJson.host || '',
         sni: configJson.sni || '',
-        tls: configJson.tls === 'tls' ? 'tls' : 'none',
-        allowInsecure: configJson.allowInsecure === true || configJson.allowInsecure === 'true',
+        tls: streamSecurity,
+        allowInsecure:
+          configJson.allowInsecure === true ||
+          configJson.allowInsecure === 'true' ||
+          configJson.insecure === true ||
+          configJson.insecure === 'true' ||
+          configJson['skip-cert-verify'] === true ||
+          configJson['skip-cert-verify'] === 'true',
+        serviceName: configJson.serviceName || '',
+        alpn: configJson.alpn || '',
+        fp: configJson.fp || configJson.fingerprint || '',
       },
     };
   }
@@ -260,7 +288,8 @@ export class UriImportService {
     }
 
     const [method, password] = credentials.split(':');
-    const [address, portValue] = hostPart.split(':');
+    const hostWithMaybeQuery = hostPart.split('?')[0];
+    const [address, portValue] = hostWithMaybeQuery.split(':');
     const port = Number(portValue);
 
     if (!method || !password || !address || !Number.isFinite(port)) {

@@ -50,6 +50,9 @@ const electronAPI = {
     get: () => ipcRenderer.invoke('settings:get'),
     save: (settings: any) => ipcRenderer.invoke('settings:save', settings),
     togglePing: (enable: boolean) => ipcRenderer.invoke('settings:togglePing', enable),
+    applySystemDns: (settings?: any) => ipcRenderer.invoke('settings:applySystemDns', settings),
+    clearSystemDns: () => ipcRenderer.invoke('settings:clearSystemDns'),
+    getSystemDns: () => ipcRenderer.invoke('settings:getSystemDns'),
   },
 
   // Debug logger
@@ -67,6 +70,18 @@ const electronAPI = {
     openGithubRelease: (url?: string) => ipcRenderer.invoke('updates:openGithubRelease', url),
     downloadAndInstallGithub: (opts?: { owner?: string; repo?: string }) =>
       ipcRenderer.invoke('updates:downloadAndInstallGithub', opts),
+  },
+
+  bridge: {
+    configure: (payload: Record<string, unknown>) => ipcRenderer.invoke('bridge:configure', payload),
+    start: () => ipcRenderer.invoke('bridge:start'),
+    stop: () => ipcRenderer.invoke('bridge:stop'),
+    scanGoogleIps: (frontDomain?: string) => ipcRenderer.invoke('bridge:scanGoogleIps', frontDomain),
+    getStatus: () => ipcRenderer.invoke('bridge:getStatus'),
+    getCodeTemplate: (authKey?: string) => ipcRenderer.invoke('bridge:getCodeTemplate', authKey),
+    getRuntimeDiagnostics: () => ipcRenderer.invoke('bridge:getRuntimeDiagnostics'),
+    setupRuntime: (opts?: { includeOptional?: boolean }) => ipcRenderer.invoke('bridge:setupRuntime', opts),
+    ensureCaFiles: () => ipcRenderer.invoke('bridge:ensureCaFiles'),
   },
   
   // Window controls for custom title bar

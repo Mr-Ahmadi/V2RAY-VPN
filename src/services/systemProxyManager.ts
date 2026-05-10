@@ -18,6 +18,7 @@ export class SystemProxyManager {
   private static readonly HTTP_PORT = 10809;
   private proxyEnabled = false;
   private lastPacInfo: Record<string, any> | null = null;
+  private lastApplyMode: 'none' | 'socks' | 'full' | 'pac' | 'http' = 'none';
 
   private parseNetworkSetupOutput(output: string): Record<string, string> {
     return output
@@ -51,49 +52,270 @@ export class SystemProxyManager {
     }
   }
 
-  private executeWithAuth(command: string): void {
-    try {
-      console.log('[SystemProxyManager] Executing command:', command.substring(0, 100));
-      
-      // First, try without sudo (may work if app has permissions)
+  async setSystemDnsServers(dnsServers: string[]): Promise<{ appliedServices: string[]; failedServices: string[]; dnsServers: string[] }> {
+    if (process.platform !== 'darwin') {
+      throw new Error(`System DNS apply is not supported on platform "${process.platform}" yet`);
+    }
+
+    const services = this.getNetworkServices();
+    if (services.length === 0) {
+      throw new Error('No network services found');
+    }
+
+    const normalizedServers = Array.from(
+      new Set(
+        (dnsServers || [])
+          .map((value) => String(value || '').trim())
+          .filter(Boolean)
+      )
+    );
+
+    if (normalizedServers.length === 0) {
+      throw new Error('No DNS servers provided');
+    }
+
+    const escapedServers = normalizedServers.map((value) => `"${value.replace(/"/g, '\\"')}"`).join(' ');
+    const appliedServices: string[] = [];
+    const failedServices: string[] = [];
+
+    for (const service of services) {
       try {
-        execSync(command, { 
-          stdio: ['pipe', 'pipe', 'pipe'],
-          shell: '/bin/bash'
-        });
-        console.log('[SystemProxyManager] Command executed successfully without sudo');
-        return;
-      } catch (directError: any) {
-        // If we get permission error, try with sudo via osascript
-        if (directError.message.includes('EACCES') || directError.message.includes('Operation not permitted')) {
-          console.log('[SystemProxyManager] Direct execution failed with permission error, attempting via osascript...');
+        this.executeWithAuth(`networksetup -setdnsservers "${service}" ${escapedServers}`);
+        appliedServices.push(service);
+      } catch (error) {
+        console.warn(`[SystemProxyManager] Failed to set DNS for "${service}":`, error);
+        failedServices.push(service);
+      }
+    }
+
+    if (appliedServices.length === 0) {
+      throw new Error(`Failed to apply DNS to any network service (${failedServices.join(', ') || 'unknown services'})`);
+    }
+
+    debugLogger.info('SystemProxyManager', 'System DNS servers applied', {
+      dnsServers: normalizedServers,
+      appliedServices,
+      failedServices,
+    });
+
+    return {
+      appliedServices,
+      failedServices,
+      dnsServers: normalizedServers,
+    };
+  }
+
+  async clearSystemDnsServers(): Promise<{ clearedServices: string[]; failedServices: string[] }> {
+    if (process.platform !== 'darwin') {
+      throw new Error(`System DNS clear is not supported on platform "${process.platform}" yet`);
+    }
+
+    const services = this.getNetworkServices();
+    if (services.length === 0) {
+      throw new Error('No network services found');
+    }
+
+    const clearedServices: string[] = [];
+    const failedServices: string[] = [];
+
+    for (const service of services) {
+      try {
+        // "empty" removes manually configured DNS and reverts to DHCP/default.
+        this.executeWithAuth(`networksetup -setdnsservers "${service}" empty`);
+        clearedServices.push(service);
+      } catch (error) {
+        console.warn(`[SystemProxyManager] Failed to clear DNS for "${service}":`, error);
+        failedServices.push(service);
+      }
+    }
+
+    if (clearedServices.length === 0) {
+      throw new Error(`Failed to clear DNS on any network service (${failedServices.join(', ') || 'unknown services'})`);
+    }
+
+    debugLogger.info('SystemProxyManager', 'System DNS servers cleared', {
+      clearedServices,
+      failedServices,
+    });
+
+    return {
+      clearedServices,
+      failedServices,
+    };
+  }
+
+  async getSystemDnsServers(): Promise<{
+    services: Array<{ service: string; dnsServers: string[]; isAutomatic: boolean }>;
+  }> {
+    if (process.platform !== 'darwin') {
+      throw new Error(`System DNS read is not supported on platform "${process.platform}" yet`);
+    }
+
+    const services = this.getNetworkServices();
+    if (services.length === 0) {
+      throw new Error('No network services found');
+    }
+
+    const result: Array<{ service: string; dnsServers: string[]; isAutomatic: boolean }> = [];
+
+    for (const service of services) {
+      try {
+        const output = execSync(`networksetup -getdnsservers "${service}"`, {
+          encoding: 'utf-8',
+        }).trim();
+
+        if (!output || /There aren't any DNS Servers set on/i.test(output)) {
+          result.push({ service, dnsServers: [], isAutomatic: true });
+          continue;
+        }
+
+        const dnsServers = output
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean);
+        result.push({ service, dnsServers, isAutomatic: false });
+      } catch (error) {
+        console.warn(`[SystemProxyManager] Failed to read DNS for "${service}":`, error);
+        result.push({ service, dnsServers: [], isAutomatic: true });
+      }
+    }
+
+    return { services: result };
+  }
+
+  private executeWithAuth(command: string): void {
+    // Try direct execution first (works if user has already granted permissions)
+    try {
+      execSync(command, { 
+        stdio: ['pipe', 'pipe', 'pipe'],
+        shell: '/bin/bash',
+        timeout: 5000 // 5 second timeout
+      });
+      return;
+    } catch (error: any) {
+      // If direct execution fails, we need admin privileges
+      // Instead of blocking with osascript, throw a helpful error
+      if (error.message.includes('EACCES') || error.message.includes('Operation not permitted')) {
+        throw new Error(
+          'System proxy configuration requires admin privileges. ' +
+          'Please run the app with necessary permissions or configure proxy manually.'
+        );
+      }
+      throw new Error(`Failed to execute proxy command: ${error.message}`);
+    }
+  }
+
+  async setHttpProxy(options: { host: string; port: number }): Promise<void> {
+    console.log('[SystemProxyManager] ========== HTTP PROXY SETUP START ==========');
+    console.log('[SystemProxyManager] Configuring HTTP/HTTPS proxy:', options);
+    
+    try {
+      const services = this.getNetworkServices();
+      console.log('[SystemProxyManager] Found network services:', services);
+
+      if (services.length === 0) {
+        throw new Error('No network services found');
+      }
+
+      const bypassDomains = '127.0.0.1,localhost';
+      let successCount = 0;
+
+      for (const service of services) {
+        try {
+          console.log(`[SystemProxyManager] Configuring "${service}"...`);
           
-          // Use osascript to request admin privileges
-          const escapedCommand = command.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-          const osascriptCmd = `osascript -e 'do shell script "${escapedCommand}" with administrator privileges'`;
+          // Set HTTP proxy
+          this.executeWithAuth(
+            `networksetup -setwebproxy "${service}" ${options.host} ${options.port}`
+          );
+          this.executeWithAuth(`networksetup -setwebproxystate "${service}" on`);
           
-          try {
-            execSync(osascriptCmd, {
-              stdio: ['pipe', 'pipe', 'pipe'],
-              shell: '/bin/bash',
-              timeout: 30000  // 30 second timeout for user to enter password
-            });
-            console.log('[SystemProxyManager] Command executed with admin privileges via osascript');
-            return;
-          } catch (osascriptError: any) {
-            if (osascriptError.message.includes('timeout') || osascriptError.status === 1) {
-              console.error('[SystemProxyManager] Admin request timed out or was cancelled');
-              throw new Error('Admin privileges request timed out. User may have cancelled the prompt.');
-            }
-            throw osascriptError;
-          }
-        } else {
-          // Some other error occurred
-          throw directError;
+          // Set HTTPS proxy
+          this.executeWithAuth(
+            `networksetup -setsecurewebproxy "${service}" ${options.host} ${options.port}`
+          );
+          this.executeWithAuth(`networksetup -setsecurewebproxystate "${service}" on`);
+          
+          // Set bypass domains
+          this.executeWithAuth(
+            `networksetup -setproxybypassdomains "${service}" ${bypassDomains}`
+          );
+          
+          console.log(`[SystemProxyManager] ✓ HTTP/HTTPS proxy enabled for "${service}"`);
+          successCount++;
+        } catch (error) {
+          console.warn(`[SystemProxyManager] Failed to configure "${service}":`, error);
         }
       }
+
+      this.proxyEnabled = true;
+      this.lastApplyMode = 'http';
+      console.log(`[SystemProxyManager] HTTP proxy configured on ${successCount} service(s)`);
+    } catch (error) {
+      console.error('[SystemProxyManager] Failed to set HTTP proxy:', error);
+      throw error;
+    }
+  }
+
+  async enableSocksProxy(options: { host: string; port: number }): Promise<void> {
+    // Always re-apply SOCKS settings because the bridge port may change after
+    // auto port-fallback, and stale system proxy ports silently break traffic.
+    if (this.proxyEnabled && this.lastApplyMode === 'socks') {
+      console.log('[SystemProxyManager] SOCKS proxy already marked enabled, reapplying to ensure active port is current');
+    }
+
+    const startTime = Date.now();
+    console.log('[SystemProxyManager] ========== SOCKS5 PROXY SETUP ==========');
+    console.log('[SystemProxyManager] Setting SOCKS5 proxy to', `${options.host}:${options.port}`);
+
+    try {
+      const services = this.getNetworkServices();
+      console.log('[SystemProxyManager] Found', services.length, 'network services');
+
+      if (services.length === 0) {
+        const error = 'No network services found - cannot configure proxy';
+        console.error('[SystemProxyManager]', error);
+        throw new Error(error);
+      }
+
+      let successCount = 0;
+      let errorCount = 0;
+      const errors: string[] = [];
+
+      const host = options.host === '0.0.0.0' ? '127.0.0.1' : options.host;
+
+      for (const service of services) {
+        try {
+          console.log(`[SystemProxyManager] Configuring SOCKS5 for service: "${service}"`);
+          
+          // Set SOCKS proxy
+          this.executeWithAuth(
+            `networksetup -setsocksfirewallproxy "${service}" ${host} ${options.port}`
+          );
+          this.executeWithAuth(`networksetup -setsocksfirewallproxystate "${service}" on`);
+          
+          console.log(`[SystemProxyManager] ✓ Configured ${service}`);
+          successCount++;
+        } catch (error: any) {
+          console.error(`[SystemProxyManager] Failed to configure ${service}:`, error.message);
+          errors.push(`${service}: ${error.message}`);
+          errorCount++;
+        }
+      }
+
+      if (successCount > 0) {
+        this.proxyEnabled = true;
+        this.lastApplyMode = 'socks';
+        const elapsed = Date.now() - startTime;
+        console.log(`[SystemProxyManager] ✓ SOCKS5 proxy enabled in ${elapsed}ms`);
+        console.log(`[SystemProxyManager] Success: ${successCount}/${services.length} services configured`);
+        debugLogger.info('SystemProxyManager', 'SOCKS5 proxy enabled', { host, port: options.port, successCount, errorCount });
+      } else {
+        throw new Error(`Failed to configure any network services. Errors: ${errors.join('; ')}`);
+      }
     } catch (error: any) {
-      console.error('[SystemProxyManager] Command execution failed:', error.message);
+      console.error('[SystemProxyManager] SOCKS5 proxy setup failed:', error.message);
+      debugLogger.error('SystemProxyManager', 'SOCKS5 proxy setup failed', { error: error.message });
       throw error;
     }
   }
@@ -186,6 +408,7 @@ export class SystemProxyManager {
 
       // Mark as enabled if at least one service succeeded
       this.proxyEnabled = true;
+      this.lastApplyMode = 'full';
       console.log(
         `[SystemProxyManager] Proxy configured on ${successCount}/${services.length} service(s)`
       );
@@ -273,31 +496,33 @@ export class SystemProxyManager {
       for (const service of services) {
         try {
           console.log(`[SystemProxyManager] Disabling proxy for "${service}"...`);
-          
-          // Disable all proxy types
-          try {
-            this.executeWithAuth(`networksetup -setsocksfirewallproxystate "${service}" off`);
-          } catch (e) {
-            console.warn(`[SystemProxyManager]   ⚠ Could not disable SOCKS proxy for "${service}"`, e);
-          }
-          
-          try {
-            this.executeWithAuth(`networksetup -setwebproxystate "${service}" off`);
-          } catch (e) {
-            console.warn(`[SystemProxyManager]   ⚠ Could not disable HTTP proxy for "${service}"`, e);
-          }
-          
-          try {
-            this.executeWithAuth(`networksetup -setsecurewebproxystate "${service}" off`);
-          } catch (e) {
-            console.warn(`[SystemProxyManager]   ⚠ Could not disable HTTPS proxy for "${service}"`, e);
-          }
 
-          // Disable Auto Proxy (PAC)
-          try {
+          // Fast cleanup based on what this app last enabled.
+          if (this.lastApplyMode === 'socks') {
+            this.executeWithAuth(`networksetup -setsocksfirewallproxystate "${service}" off`);
+          } else if (this.lastApplyMode === 'pac') {
             this.executeWithAuth(`networksetup -setautoproxystate "${service}" off`);
-          } catch (e) {
-            // ignore
+          } else {
+            try {
+              this.executeWithAuth(`networksetup -setsocksfirewallproxystate "${service}" off`);
+            } catch (e) {
+              console.warn(`[SystemProxyManager]   ⚠ Could not disable SOCKS proxy for "${service}"`, e);
+            }
+            try {
+              this.executeWithAuth(`networksetup -setwebproxystate "${service}" off`);
+            } catch (e) {
+              console.warn(`[SystemProxyManager]   ⚠ Could not disable HTTP proxy for "${service}"`, e);
+            }
+            try {
+              this.executeWithAuth(`networksetup -setsecurewebproxystate "${service}" off`);
+            } catch (e) {
+              console.warn(`[SystemProxyManager]   ⚠ Could not disable HTTPS proxy for "${service}"`, e);
+            }
+            try {
+              this.executeWithAuth(`networksetup -setautoproxystate "${service}" off`);
+            } catch (e) {
+              // ignore
+            }
           }
 
           console.log(`[SystemProxyManager] ✓ Proxy disabled for "${service}"`);
@@ -310,6 +535,7 @@ export class SystemProxyManager {
 
       if (successCount > 0) {
         this.proxyEnabled = false;
+        this.lastApplyMode = 'none';
         console.log(
           `[SystemProxyManager] Proxy disabled for ${successCount}/${services.length} service(s)`
         );
@@ -349,6 +575,7 @@ export class SystemProxyManager {
 
       if (successCount > 0) {
         this.proxyEnabled = true;
+        this.lastApplyMode = 'pac';
         console.log(
           `[SystemProxyManager] PAC enabled for ${successCount} service(s), ${errorCount} failed`
         );
