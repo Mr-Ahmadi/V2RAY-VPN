@@ -92,6 +92,7 @@ export default function BridgePanel() {
   const [scanResults, setScanResults] = useState<ProbeResult[]>([]);
   const [error, setError] = useState('');
   const [templateCode, setTemplateCode] = useState('');
+  const [previewAuthKey, setPreviewAuthKey] = useState('');
   const [copyDone, setCopyDone] = useState(false);
   const [runtime, setRuntime] = useState<RuntimeDiagnostics | null>(null);
   const [runtimeSetupBusy, setRuntimeSetupBusy] = useState(false);
@@ -105,9 +106,10 @@ export default function BridgePanel() {
     [scripts],
   );
   const primaryAuthKey = scripts[0]?.key || '';
+  const effectivePreviewAuthKey = previewAuthKey.trim() || primaryAuthKey;
   const codePreview = useMemo(
-    () => renderCodeWithAuthKey(templateCode, primaryAuthKey),
-    [templateCode, primaryAuthKey],
+    () => renderCodeWithAuthKey(templateCode, effectivePreviewAuthKey),
+    [templateCode, effectivePreviewAuthKey],
   );
 
   const loadCodeTemplate = async () => {
@@ -197,7 +199,7 @@ export default function BridgePanel() {
 
   const handleGenerateAuthKey = () => {
     const nextKey = generateRandomAuthKey();
-    setScripts((prev) => prev.map((row) => ({ ...row, key: nextKey })));
+    setPreviewAuthKey(nextKey);
     setCopyDone(false);
   };
 
@@ -541,7 +543,7 @@ export default function BridgePanel() {
                 <Box>
                   <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Apps Script Code.gs</Typography>
                   <Typography variant="caption" color="text.secondary">
-                    AUTH_KEY is auto-filled from the first script row. Keep the same key across all script deployments.
+                    AUTH_KEY preview uses first script key by default. Set AUTH_KEY only changes Code.gs preview.
                   </Typography>
                 </Box>
                 <Stack direction="row" spacing={1}>

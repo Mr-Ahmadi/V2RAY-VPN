@@ -54,6 +54,7 @@ export class BridgeService {
   private coreProcess: ChildProcess | null = null;
   private userInitiatedStop = false;
   private config: ShadeConfig | null = null;
+  private lastCoreOutput = '';
   private lastStatus: ShadeStatus = {
     running: false,
     http: null,
@@ -332,15 +333,19 @@ export class BridgeService {
     const envPath = process.env.BRIDGE_CORE_ENTRY?.trim();
     const rootFromSrcOrDist = path.resolve(__dirname, '../../../..');
     const appRoot = path.resolve(process.cwd());
-    const candidates = [
+    const candidates = this.expandAsarPathCandidates([
       envPath || '',
       path.join(appRoot, 'bridge-core', 'main.py'),
       path.join(rootFromSrcOrDist, 'bridge-core', 'main.py'),
-      path.join(process.resourcesPath || '', 'bridge-core', 'main.py'),
       path.join(process.resourcesPath || '', 'app.asar.unpacked', 'bridge-core', 'main.py'),
-    ].filter(Boolean);
+      path.join(process.resourcesPath || '', 'bridge-core', 'main.py'),
+      path.join(process.resourcesPath || '', 'app.asar', 'bridge-core', 'main.py'),
+    ]);
 
     for (const candidate of candidates) {
+      if (this.isAsarVirtualPath(candidate)) {
+        continue;
+      }
       if (fs.existsSync(candidate)) {
         return candidate;
       }
@@ -355,13 +360,14 @@ export class BridgeService {
     const envPath = process.env.BRIDGE_APPS_SCRIPT_TEMPLATE?.trim();
     const rootFromSrcOrDist = path.resolve(__dirname, '../../../..');
     const appRoot = path.resolve(process.cwd());
-    const candidates = [
+    const candidates = this.expandAsarPathCandidates([
       envPath || '',
       path.join(appRoot, 'bridge-core', 'apps_script', 'Code.gs'),
       path.join(rootFromSrcOrDist, 'bridge-core', 'apps_script', 'Code.gs'),
-      path.join(process.resourcesPath || '', 'bridge-core', 'apps_script', 'Code.gs'),
       path.join(process.resourcesPath || '', 'app.asar.unpacked', 'bridge-core', 'apps_script', 'Code.gs'),
-    ].filter(Boolean);
+      path.join(process.resourcesPath || '', 'bridge-core', 'apps_script', 'Code.gs'),
+      path.join(process.resourcesPath || '', 'app.asar', 'bridge-core', 'apps_script', 'Code.gs'),
+    ]);
 
     for (const candidate of candidates) {
       if (fs.existsSync(candidate)) {
@@ -574,6 +580,7 @@ print(json.dumps(result))
     envOverrides.BRIDGE_CA_DIR = caDir;
     envOverrides.BRIDGE_CA_CERT_FILE = this.config?.caCertFile || path.join(caDir, 'ca.crt');
     envOverrides.BRIDGE_CA_KEY_FILE = this.config?.caKeyFile || path.join(caDir, 'ca.key');
+    this.lastCoreOutput = '';
     const proc = spawn(command, args, {
       env: {
         ...process.env,
@@ -588,11 +595,13 @@ print(json.dumps(result))
 
     proc.stdout?.on('data', (chunk: Buffer) => {
       const text = chunk.toString('utf-8');
+      this.captureCoreOutput(text);
       debugLogger.info('ShadeCore', text.trim() || '[stdout]');
     });
 
     proc.stderr?.on('data', (chunk: Buffer) => {
       const text = chunk.toString('utf-8');
+      this.captureCoreOutput(text);
       debugLogger.warn('ShadeCore', text.trim() || '[stderr]');
     });
 
@@ -631,7 +640,8 @@ print(json.dumps(result))
   private async waitForCoreListeners(config: ShadeConfig): Promise<void> {
     const httpReady = await this.waitForListener(config.httpHost, config.httpPort, BridgeService.LISTENER_READY_TIMEOUT_MS);
     if (!httpReady) {
-      throw new Error(`Bridge HTTP listener did not become ready on ${config.httpHost}:${config.httpPort}`);
+      const details = this.lastCoreOutput ? ` Last core output: ${this.lastCoreOutput}` : '';
+      throw new Error(`Bridge HTTP listener did not become ready on ${config.httpHost}:${config.httpPort}.${details}`);
     }
 
     if (!config.socks5Enabled) {
@@ -807,6 +817,32 @@ print(json.dumps(result))
 
       setTimeout(() => done(false), timeoutMs);
     });
+  }
+
+  private captureCoreOutput(text: string): void {
+    const cleaned = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!cleaned) return;
+    this.lastCoreOutput = cleaned.slice(-500);
+  }
+
+  private expandAsarPathCandidates(rawCandidates: string[]): string[] {
+    const candidates: string[] = [];
+    const seen = new Set<string>();
+    for (const raw of rawCandidates) {
+      const candidate = String(raw || '').trim();
+      if (!candidate) continue;
+      const unpacked = candidate.replace(/([/\\])app\.asar([/\\])/g, '$1app.asar.unpacked$2');
+      for (const value of [unpacked, candidate]) {
+        if (!value || seen.has(value)) continue;
+        seen.add(value);
+        candidates.push(value);
+      }
+    }
+    return candidates;
+  }
+
+  private isAsarVirtualPath(value: string): boolean {
+    return /([/\\])app\.asar([/\\])/.test(String(value || ''));
   }
 }
 

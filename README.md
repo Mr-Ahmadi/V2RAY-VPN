@@ -10,7 +10,7 @@ Desktop V2Ray client (Electron + React).
 - Connect/disconnect with live traffic stats
 - Set proxy mode (Global, Per-app, PAC)
 - Manage per-app policies and routing rules
-- Run a local relay bridge from the **Bridge** tab (MasterHttpRelayVPN workflow)
+- Run a local relay bridge from the **Bridge** tab
 - Check/download updates from GitHub Releases
 
 ## Requirements
@@ -18,8 +18,8 @@ Desktop V2Ray client (Electron + React).
 - Node.js 18+
 - npm 9+
 - Python 3.10+ (for Bridge runtime)
-- `v2ray-core/` binaries present
-- `bridge-core/` (setup.sh)
+- `v2ray-core/` (setup.sh)
+- `bridge-core/` (python code avilable)
 
 ## Run locally
 
@@ -52,7 +52,6 @@ npm run dist
 8. Click **Configure + Start**.
 
 Notes:
-- The Bridge tab includes an **Open Upstream Repo** button for MasterHttpRelayVPN docs.
 - Bridge CA files are auto-managed in user data (`~/.v2ray-vpn/bridge/ca` by default).
 ## License
 
