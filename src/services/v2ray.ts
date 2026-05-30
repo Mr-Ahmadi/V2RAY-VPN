@@ -275,12 +275,18 @@ export class V2RayService {
       const task = (async () => {
         try {
           await systemProxyManager.disableSystemProxy();
-          const elapsed = Date.now() - cleanupStartTime;
-          console.log(`[V2RayService] Proxy cleanup completed in ${elapsed}ms`);
         } catch (error) {
-          console.error('[V2RayService] Proxy cleanup failed:', error);
-          throw error;
+          console.error('[V2RayService] System proxy cleanup failed:', error);
         }
+
+        try {
+          this.getAppRoutingService().clearProxyEnv();
+        } catch (error) {
+          console.error('[V2RayService] App routing proxy env cleanup failed:', error);
+        }
+
+        const elapsed = Date.now() - cleanupStartTime;
+        console.log(`[V2RayService] Proxy cleanup completed in ${elapsed}ms`);
       })();
       this.proxyCleanupTask = task.finally(() => {
         if (this.proxyCleanupTask === task) {

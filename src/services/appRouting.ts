@@ -871,6 +871,25 @@ export class AppRoutingService {
     }
   }
 
+  clearProxyEnv(): void {
+    if (process.platform !== 'darwin') return;
+    try {
+      const { execSync: execSyncFn } = require('child_process');
+      for (const key of AppRoutingService.PROXY_ENV_KEYS) {
+        try {
+          execSyncFn(`launchctl unsetenv ${key} 2>/dev/null || true`, { stdio: 'ignore' });
+        } catch {
+          // ignore individual key failures
+        }
+      }
+      debugLogger.info('AppRoutingService', 'Cleared all proxy env vars via launchctl');
+    } catch (e) {
+      debugLogger.warn('AppRoutingService', 'Could not clear launchctl proxy env vars', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
   async ensureAppBypassesProxy(appPath: string, restartIfRunning: boolean = false): Promise<void> {
     const running = this.isAppRunning(appPath);
     if (running && restartIfRunning) {

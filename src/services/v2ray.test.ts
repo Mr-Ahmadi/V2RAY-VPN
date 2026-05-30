@@ -63,8 +63,8 @@ describe('V2RayService - Routing Rules', () => {
         { blockAds: false }
       );
 
-      // Should have localhost bypass + Telegram domain + Telegram IP rules
-      expect(config.routing.rules).toHaveLength(3);
+      // Should have localhost bypass + Telegram domain + Telegram IP + catch-all rules
+      expect(config.routing.rules).toHaveLength(4);
       expect(config.routing.rules[0]).toEqual({
         type: 'field',
         outboundTag: 'direct',
@@ -94,6 +94,11 @@ describe('V2RayService - Routing Rules', () => {
           '149.154.160.0/20',
         ],
       });
+      expect(config.routing.rules[3]).toEqual({
+        type: 'field',
+        outboundTag: 'proxy',
+        port: '0-65535',
+      });
     });
 
     test('should include ad-blocking rule when blockAds is enabled', async () => {
@@ -114,8 +119,8 @@ describe('V2RayService - Routing Rules', () => {
         { blockAds: true }
       );
 
-      // Should have 4 routing rules (localhost bypass + Telegram domain + Telegram IP + ad blocking)
-      expect(config.routing.rules).toHaveLength(4);
+      // Should have 5 routing rules (localhost bypass + Telegram domain + Telegram IP + ad blocking + catch-all)
+      expect(config.routing.rules).toHaveLength(5);
       expect(config.routing.rules[0]).toEqual({
         type: 'field',
         outboundTag: 'direct',
@@ -149,6 +154,11 @@ describe('V2RayService - Routing Rules', () => {
         type: 'field',
         outboundTag: 'block',
         domain: ['geosite:category-ads-all'],
+      });
+      expect(config.routing.rules[4]).toEqual({
+        type: 'field',
+        outboundTag: 'proxy',
+        port: '0-65535',
       });
     });
 

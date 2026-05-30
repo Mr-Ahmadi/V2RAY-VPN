@@ -469,6 +469,25 @@ app.on('before-quit', async () => {
   }
 });
 
+// Handle OS signals for clean shutdown
+const handleSignal = async (signal: string) => {
+  console.log(`[Main] Received ${signal}, shutting down...`);
+  if (v2rayService) {
+    await v2rayService.stop().catch((error: any) => {
+      console.warn(`[Main] V2Ray stop error on ${signal}:`, error);
+    });
+  }
+  if (bridgeService) {
+    await bridgeService.stop().catch((error: any) => {
+      console.warn(`[Main] Bridge stop error on ${signal}:`, error);
+    });
+  }
+  app.quit();
+};
+
+process.on('SIGTERM', () => { void handleSignal('SIGTERM'); });
+process.on('SIGINT', () => { void handleSignal('SIGINT'); });
+
 app.on('activate', () => {
   if (mainWindow === null) {
     createWindow();
